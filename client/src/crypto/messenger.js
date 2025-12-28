@@ -20,7 +20,7 @@ import {
 /** ******* Implementation ********/
 
 export class MessengerClient {
-  constructor (certAuthorityPublicKey, govPublicKey) {
+  constructor(certAuthorityPublicKey, govPublicKey) {
     this.caPublicKey = certAuthorityPublicKey
     this.govPublicKey = govPublicKey
     this.conns = {}
@@ -28,7 +28,116 @@ export class MessengerClient {
     this.EGKeyPair = {}
   }
 
-  async generateCertificate (username) {
+  /* Utility to serialize generic object with CryptoKeys */
+  async serializeState() {
+    const serializeKey = async (key) => await cryptoKeyToJSON(key);
+
+    const serializedState = {
+      conns: {},
+      certs: {},
+      EGKeyPair: {}
+    };
+
+    // Serialize Identity Key Pair
+    if (this.EGKeyPair.pub) {
+      serializedState.EGKeyPair = {
+        pub: await serializeKey(this.EGKeyPair.pub),
+        sec: await serializeKey(this.EGKeyPair.sec)
+      }
+    }
+
+    // Serialize Certificates
+    for (const [username, cert] of Object.entries(this.certs)) {
+      serializedState.certs[username] = {
+        username: cert.username,
+        pk: await serializeKey(cert.pk)
+      }
+    }
+
+    // Serialize Connections
+    // conns[name] = { DHs, DHr, RK, CKs, CKr, NS, NR, PN, skippedKeys }
+    for (const [name, conn] of Object.entries(this.conns)) {
+      serializedState.conns[name] = {
+        DHs: {
+          pub: await serializeKey(conn.DHs.pub),
+          sec: await serializeKey(conn.DHs.sec)
+        },
+        DHr: await serializeKey(conn.DHr),
+        RK: await serializeKey(conn.RK),
+        CKs: conn.CKs ? await serializeKey(conn.CKs) : null,
+        CKr: conn.CKr ? await serializeKey(conn.CKr) : null,
+        NS: conn.NS,
+        NR: conn.NR,
+        PN: conn.PN,
+        skippedKeys: {} // Serialize skipped keys (map of strings to keys)
+      }
+      for (const [k, v] of Object.entries(conn.skippedKeys)) {
+        serializedState.conns[name].skippedKeys[k] = await serializeKey(v);
+      }
+    }
+
+    return JSON.stringify(serializedState);
+  }
+
+  /* Utility to deserialize state */
+  async deserializeState(jsonState) {
+    const state = JSON.parse(jsonState);
+    const { subtle } = window.crypto;
+
+    const importKey = async (jwk, alg, usage) => {
+      if (!jwk) return null;
+      return await subtle.importKey('jwk', jwk, alg, true, usage);
+    }
+
+    // Import Identity
+    if (state.EGKeyPair && state.EGKeyPair.pub) {
+      this.EGKeyPair = {
+        pub: await importKey(state.EGKeyPair.pub, { name: 'ECDH', namedCurve: 'P-384' }, []),
+        sec: await importKey(state.EGKeyPair.sec, { name: 'ECDH', namedCurve: 'P-384' }, ['deriveKey'])
+      }
+    }
+
+    // Import Certs
+    for (const [username, cert] of Object.entries(state.certs)) {
+      this.certs[username] = {
+        username: cert.username,
+        pk: await importKey(cert.pk, { name: 'ECDH', namedCurve: 'P-384' }, [])
+      }
+    }
+
+    // Import Connections
+    // Need to know algorithms for each key type:
+    // DH keys: ECDH P-384
+    // RK, CKs, CKr: HMAC (SHA-256) (based on lib.js computeDH result used in HKDF -> HMAC)
+    // Actually RK, CKs, CKr are HMAC keys.
+    const hmacAlg = { name: 'HMAC', hash: 'SHA-256', length: 256 };
+
+    for (const [name, conn] of Object.entries(state.conns)) {
+      this.conns[name] = {
+        DHs: {
+          pub: await importKey(conn.DHs.pub, { name: 'ECDH', namedCurve: 'P-384' }, []),
+          sec: await importKey(conn.DHs.sec, { name: 'ECDH', namedCurve: 'P-384' }, ['deriveKey'])
+        },
+        DHr: await importKey(conn.DHr, { name: 'ECDH', namedCurve: 'P-384' }, []),
+        RK: await importKey(conn.RK, hmacAlg, ['sign']), // HKDF uses 'sign' (HMAC)
+        CKs: await importKey(conn.CKs, hmacAlg, ['sign']),
+        CKr: await importKey(conn.CKr, hmacAlg, ['sign']),
+        NS: conn.NS,
+        NR: conn.NR,
+        PN: conn.PN,
+        skippedKeys: {}
+      }
+
+      // Skipped Keys are AES-GCM keys (derived from HMACtoAESKey)
+      const aesAlg = 'AES-GCM';
+      for (const [k, v] of Object.entries(conn.skippedKeys)) {
+        // lib.js HMACtoAESKey returns key with usages ['encrypt', 'decrypt']
+        this.conns[name].skippedKeys[k] = await importKey(v, aesAlg, ['encrypt', 'decrypt']);
+      }
+    }
+  }
+
+  async generateCertificate(username) {
     const keyPair = await generateEG()
     this.EGKeyPair = keyPair
     const certificate = {
@@ -38,14 +147,14 @@ export class MessengerClient {
     return certificate
   }
 
-  async receiveCertificate (certificate, signature) {
+  async receiveCertificate(certificate, signature) {
     const certString = JSON.stringify(certificate)
     const isValid = await verifyWithECDSA(this.caPublicKey, certString, signature)
     if (!isValid) throw new Error('Certificate Tampering Detected!')
     this.certs[certificate.username] = certificate
   }
 
-  async sendMessage (name, plaintext) {
+  async sendMessage(name, plaintext) {
     if (!this.conns[name]) {
       const otherCert = this.certs[name]
       if (!otherCert) throw new Error('Unknown user certificate!')
@@ -75,10 +184,10 @@ export class MessengerClient {
       state.DHs = myDH
       const dhSecret = await computeDH(state.DHs.sec, state.DHr)
       const [newRK, newCKs] = await HKDF(state.RK, dhSecret, 'ratchet-str')
-      
+
       state.RK = newRK
       state.CKs = newCKs
-      
+
       // Cập nhật PN (Previous Number) = số tin nhắn đã gửi ở chuỗi trước
       state.PN = state.NS
       // Reset số thứ tự tin nhắn cho chuỗi mới
@@ -117,14 +226,14 @@ export class MessengerClient {
     return [header, ciphertext]
   }
 
-  async receiveMessage (name, [header, ciphertext]) {
+  async receiveMessage(name, [header, ciphertext]) {
     if (!this.conns[name]) {
       const otherCert = this.certs[name]
       if (!otherCert) throw new Error('Unknown user certificate!')
 
       const sk = await computeDH(this.EGKeyPair.sec, otherCert.pk)
       const [rk, ckr] = await HKDF(sk, await computeDH(this.EGKeyPair.sec, header.dh), 'ratchet-str')
-      
+
       this.conns[name] = {
         DHs: this.EGKeyPair,
         DHr: header.dh,
@@ -148,7 +257,7 @@ export class MessengerClient {
       // Tìm thấy chìa trong kho -> Lấy ra dùng luôn
       const mk = state.skippedKeys[skipKeyIndex]
       delete state.skippedKeys[skipKeyIndex] // Dùng xong xóa ngay
-      
+
       try {
         const plaintext = await decryptWithGCM(mk, ciphertext, header.receiverIV, JSON.stringify(header))
         return bufferToString(plaintext)
@@ -159,7 +268,7 @@ export class MessengerClient {
 
     // --- BƯỚC 2: KIỂM TRA DH RATCHET (Có đổi lượt không?) ---
     const oldDHJson = JSON.stringify(await cryptoKeyToJSON(state.DHr))
-    
+
     if (headerDHJson !== oldDHJson) {
       // 2.1. Trước khi đổi lượt, phải "vét" nốt các chìa khóa còn thiếu của lượt cũ
       // Chạy từ NR hiện tại đến PN (số tin tối đa của lượt cũ)
@@ -173,7 +282,7 @@ export class MessengerClient {
       // 2.2. Thực hiện DH Ratchet
       const dhSecret = await computeDH(state.DHs.sec, header.dh)
       const [newRK, newCKr] = await HKDF(state.RK, dhSecret, 'ratchet-str')
-      
+
       state.RK = newRK
       state.CKr = newCKr
       state.DHr = header.dh
