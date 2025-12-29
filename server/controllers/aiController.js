@@ -1,9 +1,9 @@
-const { GoogleGenerativeAI } = require("@google/generative-ai");
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 // Đảm bảo bạn đã có GEMINI_API_KEY trong file .env
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-exports.chatWithGemini = async (socket, data) => {
+export async function chatWithGemini(socket, data) {
     try {
         const { prompt, history } = data; 
         // history: mảng các tin nhắn trước đó để AI nhớ ngữ cảnh (nếu muốn)
@@ -26,4 +26,4 @@ exports.chatWithGemini = async (socket, data) => {
         console.error('Gemini API Error:', err);
         socket.emit('ai_error', { message: 'AI không phản hồi lúc này.' });
     }
-};
+}

@@ -1,7 +1,7 @@
-const Message = require('../models/Messages');
-const User = require('../models/User');
+import Message from '../models/Messages.js';
+import User from '../models/User.js';
 
-exports.sendMessage = async (io, socket, data) => {
+export const sendMessage = async (io, socket, data) => {
     try {
         const {to , header, ciphertext} = data;
         const from = Array.from(socket.rooms)[1];// Lấy username
@@ -34,7 +34,7 @@ exports.sendMessage = async (io, socket, data) => {
 
 // Sau mỗi lần gửi/nhận tin nhắn, trạng thái Ratchet thay đổi.
 // Client phải mã hóa state mới và gửi lên đây để lưu lại.
-exports.syncKeychain = async (socket, data) => {
+export const syncKeychain = async (socket, data) => {
     try {
         const { username, encryptedKeychain} = data;
 
@@ -49,7 +49,7 @@ exports.syncKeychain = async (socket, data) => {
 };
 
 // Lấy tin nhắn cũ khi user login lại
-exports.fetchOfflineMessages = async (socket, username) => {
+export const fetchOfflineMessages = async (socket, username) => {
     try {
         const messages = await Message.find({ to: username }).sort({ createdAt: 1 });
         

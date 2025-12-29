@@ -4,6 +4,7 @@ import { ClientContext } from '../App';
 import { MessengerClient } from '../crypto/messenger';
 import { deriveKeyFromPassword } from '../utils';
 import { decryptWithGCM, fromBase64 } from '../crypto/lib';
+import { CA_PUBLIC_KEY } from '../config';
 import io from 'socket.io-client';
 
 const Login = () => {
@@ -33,10 +34,25 @@ const Login = () => {
         const keychainJSON = new TextDecoder().decode(keychainBuffer);
 
         const client = new MessengerClient(null, null);
+
+        const caKey = await window.crypto.subtle.importKey(
+            "jwk", CA_PUBLIC_KEY_CONFIG,
+            { name: "ECDSA", namedCurve: "P-384" },
+            true, ["verify"]
+        );
+        client.caPublicKey = caKey; // Gán quyền lực tối cao cho client
+        
         await client.deserializeState(keychainJSON);
 
         clientRef.current = client;
-        setUser({ username: data.username, socket });
+
+        // Lưu pwKey và salt để dùng cho việc lưu keychain sau này ở Chat.jsx
+        setUser({ 
+          username: data.username, 
+          socket,
+          pwKey, // Để encrypt lại keychain
+          salt   //Để đóng gói keychain
+        });
         navigate('/chat');
       } catch (err) {
         console.error(err);

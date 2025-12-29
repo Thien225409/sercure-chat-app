@@ -1,7 +1,7 @@
 import { useEffect, useState, useContext, useRef } from 'react';
 import { ClientContext } from '../App';
 import axios from 'axios';
-import { encryptFile, decryptFile, toBase64, fromBase64 } from '../crypto/lib';
+import { encryptFile, decryptFile, toBase64, fromBase64, encryptWithGCM, genRandomSalt } from '../crypto/lib';
 
 const Chat = () => {
   const { clientRef, user } = useContext(ClientContext);
@@ -12,28 +12,61 @@ const Chat = () => {
   const fileInputRef = useRef(null);
   const messagesEndRef = useRef(null);
 
-  // Auto scroll
+  // Auto scroll khi có tin nhắn mới
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
   useEffect(scrollToBottom, [messages]);
 
-  // --- 1. NHẬN TIN NHẮN (LOGIC THẬT) ---
+  // ĐỒNG BỘ KEYCHAIN
+  const saveRatchetState = async () => {
+    if(!clientRef.current || !user.pwKey) return;
+
+    try {
+      // Serialize trạng thái hiện tại của MessagerClient
+      const keychainRaw = await clientRef.current.serializeState();
+
+      // Mã hóa bằng key đăng nhập của user (pwKey từ login)
+      const iv = genRandomSalt(12);
+      const encryptKeychainBuffer = await encryptWithGCM(user.pwKey, keychainRaw, iv);
+
+      // Đóng gói
+      const encryptedKeychainPkg = JSON.stringify({
+        iv: toBase64(iv),
+        data: toBase64(new Uint8Array(encryptKeychainBuffer)),
+        salt: toBase64(user.salt)
+      });
+
+      // Gửi lên server để update state
+      user.socket.emit('update_keychain', { 
+          username: user.username, 
+          encryptedKeychain: encryptedKeychainPkg 
+      });
+      console.log("🔒 Ratchet State Saved!");
+    } catch (error) {
+      console.error("Lỗi lưu Keychain:", error);
+    }
+  };
+
+  // --- LẮNG NGHE SỰ KIỆN TỪ SERVER ---
   useEffect(() => {
     if (!user?.socket) return;
 
+    // Nhận tin nhắn E2E
     user.socket.on('receive_message', async (data) => {
       try {
-        // Handshake: Nếu chưa có Cert của người gửi, phải lấy ngay
+        // Handshake: Nếu chưa có Cert (publickey) của người gửi, phải lấy ngay
         if (!clientRef.current.certs[data.from]) {
            await fetchAndImportCert(data.from);
         }
 
+        // GIẢI MÃ: Double Ratchet xử lý (messenger.js)
         const plaintext = await clientRef.current.receiveMessage(
           data.from, 
           [data.payload.header, data.payload.ciphertext]
         );
 
+        // Parse nội dung (Text hoặc File JSON)
         let content;
         try {
           const jsonContent = JSON.parse(plaintext);
@@ -43,64 +76,141 @@ const Chat = () => {
         }
 
         setMessages(prev => [...prev, { sender: data.from, content }]);
-        // Lưu keychain (Tạm bỏ qua để code gọn, thực tế cần syncKeychain ở đây)
+        
+        // Lưu trạng thái Ratchet mới ngay sau khi nhận tin
+        await saveRatchetState();
       } catch (err) {
-        console.error("Lỗi nhận tin:", err);
+        console.error("Lỗi giải mã tin nhắn đến:", err);
       }
+    });
+
+    // Nhận tin nhắn cũ (offline messages) khi vừa mới login
+    user.socket.on('offline_messages', async (msgs) => {
+      console.log(`Đang tải ${msgs.length} tin nhắn offline...`);
+      for(const msg of msgs) {
+        try {
+          if (!clientRef.current.certs[msg.from]) {
+            await fetchAndImportCert(msg.from);
+          }
+          const plaintext = await clientRef.current.receiveMessage(
+            msg.from, 
+            [msg.payload.header, msg.payload.ciphertext]
+          );
+          let content;
+          try {
+            const jsonContent = JSON.parse(plaintext);
+            content = jsonContent.type ? jsonContent : { type: 'TEXT', text: plaintext };
+          } catch {
+            content = { type: 'TEXT', text: plaintext };
+          }
+          setMessages(prev => [...prev, { sender: msg.from, content }]);
+        } catch (error) {
+          console.error("Lỗi giải mã tin offline:", e);
+        }
+      }
+      // Xử lý xong hết offline message thì lưu state 1 lần
+      if(msgs.length > 0) await saveRatchetState();
     });
     
     // Nhận tin từ AI
     user.socket.on('ai_response', (data) => {
-        setMessages(prev => [...prev, { sender: 'Gemini AI', content: { type: 'TEXT', text: data.text } }]);
+      setMessages(prev => [...prev, { sender: 'Gemini AI', content: { type: 'TEXT', text: data.text } }]);
     });
 
-    return () => user.socket.off('receive_message');
+    return () => {
+      user.socket.off('receive_message');
+      user.socket.off('offline_messages');
+      user.socket.off('ai_response');
+    };
   }, [user]);
 
-  // --- 2. CÁC HÀM HỖ TRỢ (HANDSHAKE & FILE) ---
+  // --- CÁC HÀM HỖ TRỢ (HANDSHAKE & FILE) ---
   const fetchAndImportCert = async (targetUsername) => {
     return new Promise((resolve, reject) => {
-        user.socket.emit('get_certificate', targetUsername, async (certJson) => {
-            if (!certJson) {
-                reject("User not found");
-                return;
+      // Emit sự kiện lấy certificate (Cần server hỗ trợ sự kiện này hoặc dùng API)
+      user.socket.emit('get_certificate', targetUsername, async (response) => {
+        // response: { username, pk } (pk là JWK)
+        if (!res || !res.pk || !res.signature) {
+            alert(`⚠️ CẢNH BÁO BẢO MẬT: Không nhận được chứng chỉ hợp lệ của ${targetUsername}.`);
+            return resolve(false);
+          }
+
+          try {
+            console.log(`🔍 Đang xác thực danh tính của ${targetUsername}...`);
+
+            // 2. Tái tạo chuỗi dữ liệu gốc (phải khớp 100% với server)
+            // Cấu trúc: { username, pk }
+            const certRaw = JSON.stringify({ 
+              username: res.username, 
+              pk: res.pk 
+            });
+
+            // 3. Thực hiện Verify Chữ ký
+            const signatureBuffer = fromBase64(res.signature);
+            const isValid = await verifyWithECDSA(
+              clientRef.current.caPublicKey, // Dùng Key Root để check
+              certRaw,
+              signatureBuffer
+            );
+
+            if (!isValid) {
+              // PHÁT HIỆN GIẢ MẠO -> DỪNG NGAY LẬP TỨC
+              const msg = `⛔ BÁO ĐỘNG ĐỎ: Phát hiện giả mạo chữ ký của ${targetUsername}! Có thể đang bị tấn công Man-in-the-Middle.`;
+              console.error(msg);
+              alert(msg);
+              return resolve(false);
             }
-            try {
-                const importedKey = await window.crypto.subtle.importKey(
-                    "jwk", certJson.pk, 
-                    { name: "ECDH", namedCurve: "P-384" }, 
-                    true, []
-                );
-                clientRef.current.certs[targetUsername] = {
-                    username: targetUsername,
-                    pk: importedKey
-                };
-                resolve(true);
-            } catch (e) { reject(e); }
-        });
+
+            console.log("✅ Chữ ký hợp lệ. Tin tưởng Import Key.");
+
+            // 4. Import Key
+            const importedKey = await window.crypto.subtle.importKey(
+              "jwk", res.pk, 
+              { name: "ECDH", namedCurve: "P-384" }, 
+              true, []
+            );
+
+            clientRef.current.certs[targetUsername] = {
+              username: targetUsername,
+              pk: importedKey
+            };
+            resolve(true);
+
+          } catch (e) {
+            console.error("Lỗi xác thực:", e);
+            reject(e);
+          }
+      });
     });
   };
 
   const handleDownloadDecrypt = async (fileContent) => {
     try {
-        const response = await fetch(fileContent.url);
-        const encryptedBlob = await response.blob();
-        const key = fromBase64(fileContent.key);
-        const iv = fromBase64(fileContent.iv);
-        const decryptedBlob = await decryptFile(encryptedBlob, key, iv, fileContent.mimeType);
-        
-        const url = URL.createObjectURL(decryptedBlob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = fileContent.fileName;
-        a.click();
-        URL.revokeObjectURL(url);
+      // 1. Tải file mã hóa từ server
+      const response = await fetch(fileContent.url);
+      const encryptedBlob = await response.blob();
+      
+      // 2. Lấy key/iv từ tin nhắn E2E
+      const key = fromBase64(fileContent.key);
+      const iv = fromBase64(fileContent.iv);
+      
+      // 3. Giải mã file ở phía Client (Browser)
+      const decryptedBlob = await decryptFile(encryptedBlob.arrayBuffer(), key, iv, fileContent.mimeType);
+      
+      // 4. Tạo link download
+      const url = URL.createObjectURL(decryptedBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileContent.fileName;
+      a.click();
+      URL.revokeObjectURL(url);
     } catch (e) {
-        alert("Lỗi tải/giải mã file.");
+        console.error(e);
+        alert("Lỗi tải hoặc giải mã file.");
     }
   }
 
-  // --- 3. GỬI TIN NHẮN (LOGIC THẬT) ---
+  // --- 3. GỬI TIN NHẮN (MÃ HÓA & GỬI) ---
   const handleSend = async () => {
     if ((!input && !fileInputRef.current?.files[0])) return;
     
@@ -114,56 +224,72 @@ const Chat = () => {
 
     if (!targetUser) return alert("Chưa nhập người nhận!");
 
-    // B. Chat Người - Handshake
-    if (!clientRef.current.conns[targetUser]) {
+    // B. Chat E2E - Kiểm tra Handshake
+    if (!clientRef.current.certs[targetUser]) {
         try {
-            await fetchAndImportCert(targetUser);
+            console.log(`Đang lấy Public Key của ${targetUser}...`);
+            const success = await fetchAndImportCert(targetUser);
+            if(!success) return alert("Không tìm thấy người dùng này!");
         } catch (e) {
-            alert("Không tìm thấy người dùng này!");
-            return;
+            return alert("Lỗi kết nối tới người dùng.");
         }
     }
 
     let finalContent = input;
     let displayContent = { type: 'TEXT', text: input };
 
-    // C. Xử lý File
+    // C. Xử lý File (nếu có)
     const file = fileInputRef.current?.files[0];
     if (file) {
-      const { encryptedBlob, key, iv, type } = await encryptFile(file);
-      const formData = new FormData();
-      formData.append('encryptedFile', encryptedBlob, file.name);
-      
       try {
+          // Mã hóa file cục bộ
+          const { encryptedBlob, key, iv, type } = await encryptFile(file);
+          
+          // Upload file mã hóa lên server (qua REST API cho nhanh)
+          const formData = new FormData();
+          formData.append('encryptedFile', encryptedBlob, file.name);
+          
           const res = await axios.post('http://localhost:8001/api/upload', formData);
+          
+          // Tạo payload chứa thông tin để giải mã (Key file sẽ được mã hóa E2E)
           const filePayload = {
             type: 'FILE',
             url: res.data.url,
             fileName: file.name,
             mimeType: type,
-            key: toBase64(key),
+            key: toBase64(key), // Key AES dùng để giải mã file
             iv: toBase64(iv)
           };
+          
+          // Chuyển thành string để encryption hàm sendMessage xử lý
           finalContent = JSON.stringify(filePayload);
           displayContent = filePayload;
       } catch (e) {
-          alert("Upload thất bại.");
+          console.error(e);
+          alert("Upload file thất bại.");
           return;
       }
     }
 
-    // D. Mã hóa & Gửi
+    // D. Mã hóa E2E & Gửi
     try {
+      // 1. MessengerClient thực hiện Ratchet và Mã hóa
       const [header, ciphertext] = await clientRef.current.sendMessage(targetUser, finalContent);
 
-      user.socket.emit('send_message', {
+      // 2. Gửi gói tin qua Socket
+      user.socket.emit('private_message', {
         to: targetUser,
-        payload: { header, ciphertext }
+        header, 
+        ciphertext 
       });
 
+      // 3. Cập nhật UI
       setMessages(prev => [...prev, { sender: 'Me', content: displayContent }]);
       setInput('');
       if (fileInputRef.current) fileInputRef.current.value = null;
+
+      // 4. QUAN TRỌNG: Lưu trạng thái Ratchet mới
+      await saveRatchetState();
 
     } catch (err) {
       console.error("Lỗi gửi tin:", err);
@@ -179,7 +305,6 @@ const Chat = () => {
         {/* User Profile */}
         <div className="p-6 border-b border-slate-700">
           <div className="flex items-center space-x-3">
-            {/* SỬA: bg-gradient-to-tr -> bg-linear-to-tr (Tailwind v4) */}
             <div className="h-10 w-10 rounded-full bg-linear-to-tr from-indigo-500 to-purple-500 flex items-center justify-center font-bold text-white shadow-lg">
               {user?.username?.charAt(0).toUpperCase()}
             </div>
@@ -265,13 +390,14 @@ const Chat = () => {
                   ) : (
                     <div className="flex items-center gap-3">
                       <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-black/20 text-xl">
-                        📎
+                        {/* Icon file */}
+                        📄
                       </div>
                       <div className="flex flex-col">
                         <span className="font-medium truncate max-w-40">{msg.content.fileName}</span>
                         <button 
                             onClick={() => handleDownloadDecrypt(msg.content)}
-                            className="text-xs underline opacity-80 hover:opacity-100 text-left"
+                            className="text-xs font-bold text-indigo-300 hover:text-indigo-100 underline mt-1 text-left"
                         >
                             Tải & Giải mã
                         </button>
@@ -291,6 +417,7 @@ const Chat = () => {
             <button 
                 onClick={() => fileInputRef.current.click()}
                 className="flex h-10 w-10 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-700 hover:text-white transition"
+                title="Gửi file"
             >
               📎
             </button>

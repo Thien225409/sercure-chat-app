@@ -1,6 +1,5 @@
 # --- Dependencies ---
 node_modules/
-package-lock.json # Tùy chọn: Nếu bạn muốn đồng bộ phiên bản chính xác thì KHÔNG ignore file này. Nhưng nếu là bài tập cá nhân thì có thể ignore cho nhẹ. (Khuyên dùng: KHÔNG ignore package-lock.json nếu làm team)
 
 # --- Environment Variables (QUAN TRỌNG NHẤT) ---
 # Chặn tất cả các file chứa biến môi trường và khóa bí mật
@@ -34,3 +33,6 @@ Thumbs.db
 
 # --- Testing / Coverage ---
 coverage/
+
+#
+certs/

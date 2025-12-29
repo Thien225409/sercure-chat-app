@@ -1,13 +1,12 @@
 export const CA_PUBLIC_KEY = {
-    // Placeholder CA Key (ECDSA P-384)
-    // In a real app, this is hardcoded from the build or fetched.
-    // I will use a dummy one for now, or we can generate one on first use (not persistent though).
-    // For now, let's assume valid JWK.
-    "crv": "P-384",
+    "key_ops": [
+        "verify"
+    ],
     "ext": true,
     "kty": "EC",
-    "x": "StartChatting", // Invalid, but needs to be replaced.
-    "y": "StartChatting"
+    "x": "lP1dylNBj0gIGaa7aZrcGe_BWNSmJZjgLu6-5U4l7kobXxEnXcpCsQmov7-YYhQU",
+    "y": "1KAtBkBPoeoPCVytIThlxHY94jIGax_9LbSNiE0ox3kOxY3128o-gIwzBNLYdQX5",
+    "crv": "P-384"
 };
 
 export const GOV_PUBLIC_KEY = {

@@ -1,11 +1,12 @@
-const User = require('../models/User');
-const bcrypt = require('bcryptjs');
+import User from '../models/User.js';
+import bcrypt from 'bcryptjs';
+import * as CA from '../utils/ca.js';
 
-exports.register = async (socket, data) => {
+export async function register(socket, data) {
     try {
         /*
         data: {
-            userName,
+            username,
             passwordHash(raw),
             certificate,
             encryptedKeychain
@@ -17,13 +18,19 @@ exports.register = async (socket, data) => {
             return socket.emit('register_error', { message: 'Thiếu thông tin đăng ký!' });
         }
 
-        // Check if user exists
+        // SỬA: Dùng User.findOne thay vì findOne độc lập
         const existingUser = await User.findOne({ username });
         if (existingUser) {
             return socket.emit('register_error', { message: 'Username đã tồn tại' });
         }
 
-        // Hash mật khẩu để bảo vệ đăng nhập (Salt của Server)
+        // --- KÝ CERTIFICATE ---
+        console.log(`🔏 Đang ký xác thực cho user: ${username}...`);
+        
+        // Gọi hàm signCertificate từ module CA
+        const signature = await CA.signCertificate(certificate);
+
+        // Hash mật khẩu (Server Side)
         const saltRounds = 10;
         const serverSidePasswordHash = await bcrypt.hash(passwordHash, saltRounds);
 
@@ -31,6 +38,7 @@ exports.register = async (socket, data) => {
             username,
             passwordHash: serverSidePasswordHash,
             publicKey: certificate,
+            signature: signature, // Lưu chữ ký
             keychainDump: encryptedKeychain
         });
 
@@ -44,12 +52,13 @@ exports.register = async (socket, data) => {
         console.error('Register error:', err);
         socket.emit('register_error', { message: 'Đăng ký thất bại: ' + err.message });
     }
-};
+}
 
-exports.login = async (socket, data) => {
+export async function login(socket, data) {
     try {
         // data : {username, passwordHash (raw)} 
         const { username, passwordHash } = data;
+
         const user = await User.findOne({ username });
 
         if (!user) {
@@ -78,4 +87,4 @@ exports.login = async (socket, data) => {
         console.error('Login error:', err);
         socket.emit('login_error', { message: 'Đăng nhập thất bại' });
     }
-};
+}

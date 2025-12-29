@@ -1,4 +1,4 @@
-const mongoose = require('mongoose');
+import mongoose from 'mongoose';
 
 const MessageSchema = new mongoose.Schema({
   from: { type: String, required: true },
@@ -7,4 +7,5 @@ const MessageSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now, expires: 604800 } // Tự xóa sau 7 ngày (TTL)
 });
 
-module.exports = mongoose.model('Message', MessageSchema);
+const Message = mongoose.model('Message', MessageSchema);
+export default Message;
