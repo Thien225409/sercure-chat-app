@@ -1,16 +1,109 @@
 import { useEffect, useState, useContext, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { ClientContext } from '../App';
 import axios from 'axios';
-import { encryptFile, decryptFile, toBase64, fromBase64, encryptWithGCM, genRandomSalt } from '../crypto/lib';
+import { encryptFile, decryptFile, toBase64,
+  fromBase64, encryptWithGCM, genRandomSalt, decryptWithGCM,
+  verifyWithECDSA} from '../crypto/lib';
+import { CA_PUBLIC_KEY } from '../config';
+import io from 'socket.io-client';
+import { deriveKeyFromPassword } from '../utils';
+import { MessengerClient } from '../crypto/messenger';
 
 const Chat = () => {
-  const { clientRef, user } = useContext(ClientContext);
+  const { clientRef, user, setUser } = useContext(ClientContext);
+  const navigate = useNavigate();
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [targetUser, setTargetUser] = useState('');
+  const [isRestoring, setIsRestoring] = useState(false);
   const [isAiMode, setIsAiMode] = useState(false);
   const fileInputRef = useRef(null);
   const messagesEndRef = useRef(null);
+
+  // Tự động đăng nhập khi F5
+  useEffect(() => {
+    // Nếu đã có user (đăng nhập rồi), hoặc đang khôi phục thì thôi
+    if (user?.socket || isRestoring) return;
+
+    const restoreSession = async () => {
+      const savedToken = sessionStorage.getItem('AUTH_TOKEN');
+      const savedKeyJson = sessionStorage.getItem('ENC_KEY');
+
+      if (!savedToken || !savedKeyJson) {
+        navigate('/login');
+        return;
+      }
+
+      console.log("🔄 Phát hiện Reload: Đang khôi phục phiên...");
+      setIsRestoring(true);
+
+      try {
+        //  Kết nối lại Socket
+        const socket = io('http://localhost:8001');
+        
+        // Gửi lệnh login để lấy lại Keychain từ server
+        socket.emit('login_token', { token: savedToken });
+
+        // Xử lý phản hồi (Dùng Promise để await cho gọn)
+        await new Promise((resolve, reject) => {
+          socket.on('login_success', async (data) => {
+            try {
+              const jwk = JSON.parse(savedKeyJson);
+              const pwKey = await window.crypto.subtle.importKey(
+                  "jwk", jwk,
+                  { name: "AES-GCM", length: 256 },
+                  true, ["encrypt", "decrypt"]
+              );
+
+              // Giải mã Keychain bằng pwKey vừa khôi phục
+              const pkg = JSON.parse(data.keychainDump);
+              const iv = fromBase64(pkg.iv);
+              const ciphertext = fromBase64(pkg.data);
+
+              const keychainBuffer = await decryptWithGCM(pwKey, ciphertext, iv);
+              const keychainJSON = new TextDecoder().decode(keychainBuffer);
+
+              const client = new MessengerClient(null, null);
+              const caKey = await window.crypto.subtle.importKey(
+                  "jwk", CA_PUBLIC_KEY,
+                  { name: "ECDSA", namedCurve: "P-384" },
+                  true, ["verify"]
+              );
+              client.caPublicKey = caKey;
+              await client.deserializeState(keychainJSON);
+              clientRef.current = client;
+
+              // Cập nhật lại Context
+              setUser({ 
+                username: data.username, 
+                socket,
+                pwKey, 
+                salt: fromBase64(pkg.salt)
+              });
+              resolve();
+            } catch (e) {
+              reject(e);
+            }
+          });
+
+          socket.on('login_error', (err) => reject(err));
+          // Timeout sau 5s nếu server không trả lời
+          setTimeout(() => reject("Timeout"), 5000);
+        });
+
+        setIsRestoring(false);
+        console.log("✅ Khôi phục thành công!");
+
+      } catch (err) {
+        console.error("Khôi phục thất bại:", err);
+        sessionStorage.clear(); // Xóa session lỗi
+        navigate('/login');
+      }
+    };
+
+    restoreSession();
+  }, [user, navigate]); // Chỉ chạy khi user thay đổi (null -> có)
 
   // Auto scroll khi có tin nhắn mới
   const scrollToBottom = () => {
@@ -20,7 +113,7 @@ const Chat = () => {
 
   // ĐỒNG BỘ KEYCHAIN
   const saveRatchetState = async () => {
-    if(!clientRef.current || !user.pwKey) return;
+    if(!clientRef.current || !user?.pwKey) return;
 
     try {
       // Serialize trạng thái hiện tại của MessagerClient
@@ -130,7 +223,7 @@ const Chat = () => {
       // Emit sự kiện lấy certificate (Cần server hỗ trợ sự kiện này hoặc dùng API)
       user.socket.emit('get_certificate', targetUsername, async (response) => {
         // response: { username, pk } (pk là JWK)
-        if (!res || !res.pk || !res.signature) {
+        if (!response || !response.pk || !response.signature) {
             alert(`⚠️ CẢNH BÁO BẢO MẬT: Không nhận được chứng chỉ hợp lệ của ${targetUsername}.`);
             return resolve(false);
           }
@@ -141,12 +234,12 @@ const Chat = () => {
             // 2. Tái tạo chuỗi dữ liệu gốc (phải khớp 100% với server)
             // Cấu trúc: { username, pk }
             const certRaw = JSON.stringify({ 
-              username: res.username, 
-              pk: res.pk 
+              username: response.username, 
+              pk: response.pk 
             });
 
             // 3. Thực hiện Verify Chữ ký
-            const signatureBuffer = fromBase64(res.signature);
+            const signatureBuffer = fromBase64(response.signature);
             const isValid = await verifyWithECDSA(
               clientRef.current.caPublicKey, // Dùng Key Root để check
               certRaw,
@@ -165,7 +258,7 @@ const Chat = () => {
 
             // 4. Import Key
             const importedKey = await window.crypto.subtle.importKey(
-              "jwk", res.pk, 
+              "jwk", response.pk, 
               { name: "ECDH", namedCurve: "P-384" }, 
               true, []
             );
@@ -297,6 +390,18 @@ const Chat = () => {
     }
   };
 
+  // --- MÀN HÌNH CHỜ KHI ĐANG KHÔI PHỤC ---
+  if (isRestoring || (!user && sessionStorage.getItem('SECURE_CHAT_USER'))) {
+    return (
+        <div className="flex h-screen w-full items-center justify-center bg-slate-900 text-white">
+            <div className="text-center animate-pulse">
+                <div className="text-4xl mb-4">🔐</div>
+                <p className="text-lg font-semibold text-cyan-400">Đang khôi phục khóa bảo mật...</p>
+                <p className="text-xs text-slate-500 mt-2">Vui lòng đợi giây lát</p>
+            </div>
+        </div>
+    );
+  }
   return (
     <div className="flex h-screen overflow-hidden bg-slate-900 text-slate-100">
       

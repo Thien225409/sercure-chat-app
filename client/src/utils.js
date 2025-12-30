@@ -28,7 +28,7 @@ export async function deriveKeyFromPassword(password, salt) {
     },
     keyMaterial,
     { name: "AES-GCM", length: 256 },
-    false,
+    true,
     ["encrypt", "decrypt"]
   );
 }

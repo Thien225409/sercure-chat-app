@@ -69,6 +69,7 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('login_token', (data) => authController.loginWithToken(socket, data));
   // --- SECURITY EVENT: LẤY CERTIFICATE ---
   socket.on('get_certificate', async (targetUsername, callback) => {
       try {
@@ -92,6 +93,10 @@ io.on('connection', (socket) => {
   socket.on('private_message', (data) => chatController.sendMessage(io, socket, data));
   socket.on('update_keychain', (data) => chatController.syncKeychain(socket, data));
 
+  socket.on('sync_message', (data) => chatController.syncMessageToHistory(socket, data));
+
+  socket.on('fetch_history', (username) => chatController.fetchHistory(socket, username));
+  
   // --- AI EVENTS ---
   socket.on('ask_ai', (data) => aiController.chatWithGemini(socket, data));
 
@@ -100,7 +105,7 @@ io.on('connection', (socket) => {
   });
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT;
 server.listen(PORT, () => {
   console.log(`🚀 Server chạy tại http://localhost:${PORT}`);
 });

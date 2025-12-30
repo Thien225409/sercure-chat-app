@@ -36,7 +36,7 @@ const Login = () => {
         const client = new MessengerClient(null, null);
 
         const caKey = await window.crypto.subtle.importKey(
-            "jwk", CA_PUBLIC_KEY_CONFIG,
+            "jwk", CA_PUBLIC_KEY,
             { name: "ECDSA", namedCurve: "P-384" },
             true, ["verify"]
         );
@@ -45,6 +45,12 @@ const Login = () => {
         await client.deserializeState(keychainJSON);
 
         clientRef.current = client;
+        
+        const exportedKey = await window.crypto.subtle.exportKey("jwk", pwKey);
+
+        // LƯU VÀO SESSION STORAGE
+        sessionStorage.setItem('AUTH_TOKEN', data.token); // JWT Token
+        sessionStorage.setItem('ENC_KEY', JSON.stringify(exportedKey)); // Key giải mã
 
         // Lưu pwKey và salt để dùng cho việc lưu keychain sau này ở Chat.jsx
         setUser({ 

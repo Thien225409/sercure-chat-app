@@ -1,6 +1,7 @@
 import User from '../models/User.js';
 import bcrypt from 'bcryptjs';
 import * as CA from '../utils/ca.js';
+import jwt from 'jsonwebtoken';
 
 export async function register(socket, data) {
     try {
@@ -71,6 +72,13 @@ export async function login(socket, data) {
             return socket.emit('login_error', { message: 'Sai mật khẩu' });
         }
 
+        const JWT_SECRET = process.env.JWT_SECRET;
+        const token = jwt.sign(
+            { username: user.username }, 
+            JWT_SECRET, 
+            { expiresIn: '24h' }
+        );
+
         // Join user room
         socket.join(username);
 
@@ -80,11 +88,43 @@ export async function login(socket, data) {
         socket.emit('login_success', {
             username: user.username,
             publicKey: user.publicKey,
-            keychainDump: user.keychainDump // Salt và Private Key
+            keychainDump: user.keychainDump, // Salt và Private Key
+            token: token
         });
 
     } catch (err) {
         console.error('Login error:', err);
         socket.emit('login_error', { message: 'Đăng nhập thất bại' });
+    }
+}
+
+export async function loginWithToken(socket, data) {
+    try {
+        const { token } = data; // Client chỉ cần gửi Token
+
+        if (!token) return socket.emit('login_error', { message: 'Thiếu token' });
+
+        const JWT_SECRET = process.env.JWT_SECRET;
+        // 1. VERIFY TOKEN (Kiểm tra chữ ký server - Không cần DB)
+        const decoded = jwt.verify(token, JWT_SECRET);
+        const username = decoded.username;
+
+        // 2. Lấy dữ liệu user để trả về (chỉ lấy data, không check session DB)
+        const user = await User.findOne({ username });
+        if (!user) return socket.emit('login_error', { message: 'User không tồn tại' });
+
+        socket.join(username);
+
+        socket.emit('login_success', {
+            username: user.username,
+            publicKey: user.publicKey,
+            keychainDump: user.keychainDump,
+            token: token 
+        });
+        console.log(`✅ User ${username} re-connected via JWT`);
+
+    } catch (e) {
+        console.error("JWT Error:", e.message);
+        socket.emit('login_error', { message: 'Token hết hạn hoặc không hợp lệ' });
     }
 }
