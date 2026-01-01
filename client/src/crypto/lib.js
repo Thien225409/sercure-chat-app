@@ -156,14 +156,14 @@ export async function HKDF (inputKey, salt, infoStr) {
 
   // since inputKey's derivedKeyAlgorithm is HMAC, we need to sign an arbitrary constant and
   // then re-import as a a CryptoKey with derivedKeyAlgorithm HKDF
-  const inputKeyBuf = await subtle.sign({ name: 'HMAC' }, inputKey, stringToUint8Array('0'))
+  const inputKeyBuf = await subtle.sign({ name: 'HMAC' }, inputKey, stringToBuffer('0'))
   const inputKeyHKDF = await subtle.importKey('raw', inputKeyBuf, 'HKDF', false, ['deriveKey'])
 
   // Generate salts that will be needed for deriveKey calls later on
-  const salt1 = await subtle.sign({ name: 'HMAC' }, salt, stringToUint8Array('salt1'))
-  const salt2 = await subtle.sign({ name: 'HMAC' }, salt, stringToUint8Array('salt2'))
+  const salt1 = await subtle.sign({ name: 'HMAC' }, salt, stringToBuffer('salt1'))
+  const salt2 = await subtle.sign({ name: 'HMAC' }, salt, stringToBuffer('salt2'))
 
-  const infoBuffer = stringToUint8Array(infoStr);
+  const infoBuffer = stringToBuffer(infoStr);
 
   // calculate first HKDF output (with salt1)
   const hkdfOut1 = await subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: salt1, info: infoBuffer },

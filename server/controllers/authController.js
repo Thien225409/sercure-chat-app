@@ -63,13 +63,15 @@ export async function login(socket, data) {
         const user = await User.findOne({ username });
 
         if (!user) {
-            return socket.emit('login_error', { message: 'Tài khoản không tồn tại' });
+            socket.emit('login_error', { message: 'Tài khoản không tồn tại' });
+            return null;
         }
 
         const isMatch = await bcrypt.compare(passwordHash, user.passwordHash);
 
         if (!isMatch) {
-            return socket.emit('login_error', { message: 'Sai mật khẩu' });
+            socket.emit('login_error', { message: 'Sai mật khẩu' });
+            return null;
         }
 
         const JWT_SECRET = process.env.JWT_SECRET;
@@ -92,9 +94,11 @@ export async function login(socket, data) {
             token: token
         });
 
+        return user;
     } catch (err) {
         console.error('Login error:', err);
         socket.emit('login_error', { message: 'Đăng nhập thất bại' });
+        return null;
     }
 }
 
@@ -102,16 +106,28 @@ export async function loginWithToken(socket, data) {
     try {
         const { token } = data; // Client chỉ cần gửi Token
 
-        if (!token) return socket.emit('login_error', { message: 'Thiếu token' });
+        if (!token) {
+            socket.emit('login_error', { message: 'Thiếu token' });
+            return null;
+        }
 
         const JWT_SECRET = process.env.JWT_SECRET;
-        // 1. VERIFY TOKEN (Kiểm tra chữ ký server - Không cần DB)
-        const decoded = jwt.verify(token, JWT_SECRET);
-        const username = decoded.username;
+        // VERIFY TOKEN (Kiểm tra chữ ký server)
+        let decoded;
+        try {
+            decoded = jwt.verify(token, JWT_SECRET);
+        } catch (e) {
+            socket.emit('login_error', { message: 'Phiên đăng nhập hết hạn' });
+            return null; // Token sai/hết hạn
+        }
 
-        // 2. Lấy dữ liệu user để trả về (chỉ lấy data, không check session DB)
+        // Lấy dữ liệu user để trả về (chỉ lấy data, không check session DB)
+        const username = decoded.username;
         const user = await User.findOne({ username });
-        if (!user) return socket.emit('login_error', { message: 'User không tồn tại' });
+        if (!user) {
+            socket.emit('login_error', { message: 'User không tồn tại' });
+            return null;
+        }
 
         socket.join(username);
 
@@ -122,9 +138,10 @@ export async function loginWithToken(socket, data) {
             token: token 
         });
         console.log(`✅ User ${username} re-connected via JWT`);
-
+        return user;
     } catch (e) {
         console.error("JWT Error:", e.message);
-        socket.emit('login_error', { message: 'Token hết hạn hoặc không hợp lệ' });
+        socket.emit('login_error', { message: 'Lỗi xác thực token' });
+        return null;
     }
 }

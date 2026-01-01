@@ -63,26 +63,45 @@ io.on('connection', (socket) => {
   socket.on('register', (data) => authController.register(socket, data));
   
   socket.on('login', async (data) => {
-    await authController.login(socket, data);
-    if (data.username) {
-        await chatController.fetchOfflineMessages(socket, data.username);
+    const loggedInUser = await authController.login(socket, data);
+
+    // CHỈ lấy tin nhắn nếu loggedInUser khác null (tức là login thành công)
+    if (loggedInUser) {
+      await chatController.fetchOfflineMessages(socket, data.username);
+    } else {
+      console.log(`⚠️ Login failed for request from ${socket.id}`);
     }
   });
 
-  socket.on('login_token', (data) => authController.loginWithToken(socket, data));
+  socket.on('login_token', async (data) => {
+    try {
+      // Chờ authController giải mã token và trả về user object
+      const loggedInUser = await authController.loginWithToken(socket, data);
+
+      // Kiểm tra logic: Phải có user thì mới đi lấy tin nhắn
+      if (loggedInUser && loggedInUser.username) {
+        console.log(`📥 Fetching offline messages for ${loggedInUser.username}`);
+      
+        // Gọi hàm bên chatController (Hàm này cần socket và username string)
+        await chatController.fetchOfflineMessages(socket, loggedInUser.username);
+      }
+    } catch (err) {
+      console.error("Login Token Handler Error:", err);
+    }
+  });
   // --- SECURITY EVENT: LẤY CERTIFICATE ---
   socket.on('get_certificate', async (targetUsername, callback) => {
       try {
-          const user = await User.findOne({ username: targetUsername });
-          if (user) {
-            callback({ 
-                username: user.username, 
-                pk: user.publicKey.pk, 
-                signature: user.signature 
-            });
-          } else {
-            callback(null);
-          }
+        const user = await User.findOne({ username: targetUsername });
+        if (user) {
+          callback({ 
+            username: user.username, 
+            pk: user.publicKey.pk, 
+            signature: user.signature 
+          });
+        } else {
+          callback(null);
+        }
       } catch (e) {
         console.error("Get Certificate Error:", e);
         callback(null);

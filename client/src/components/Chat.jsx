@@ -2,10 +2,12 @@ import { useEffect, useState, useContext, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ClientContext } from '../App';
 import axios from 'axios';
-import { encryptFile, decryptFile, toBase64,
+import {
+  encryptFile, decryptFile, toBase64,
   fromBase64, encryptWithGCM, genRandomSalt, decryptWithGCM,
-  verifyWithECDSA} from '../crypto/lib';
-import { CA_PUBLIC_KEY } from '../config';
+  verifyWithECDSA
+} from '../crypto/lib';
+import { CA_PUBLIC_KEY, GOV_PUBLIC_KEY } from '../config';
 import io from 'socket.io-client';
 import { deriveKeyFromPassword } from '../utils';
 import { MessengerClient } from '../crypto/messenger';
@@ -13,17 +15,26 @@ import { MessengerClient } from '../crypto/messenger';
 const Chat = () => {
   const { clientRef, user, setUser } = useContext(ClientContext);
   const navigate = useNavigate();
-  const [messages, setMessages] = useState([]);
+  
+  // --- STATE QUẢN LÝ NHIỀU PHÒNG CHAT ---
+  // conversations: { 'username1': [msgs...], 'username2': [msgs...] }
+  const [conversations, setConversations] = useState({});
+  const [activeContact, setActiveContact] = useState(null); // Người đang chat cùng (username hoặc 'AI')
+  const [unread, setUnread] = useState({}); // { 'username1': 5, ... }
+
   const [input, setInput] = useState('');
-  const [targetUser, setTargetUser] = useState('');
+  const [searchUser, setSearchUser] = useState(''); // Input tìm người dùng mới
   const [isRestoring, setIsRestoring] = useState(false);
-  const [isAiMode, setIsAiMode] = useState(false);
   const fileInputRef = useRef(null);
   const messagesEndRef = useRef(null);
 
+  // Helper: Lấy tin nhắn hiện tại để hiển thị
+  const activeMessages = activeContact 
+    ? (conversations[activeContact] || []) 
+    : [];
+
   // Tự động đăng nhập khi F5
   useEffect(() => {
-    // Nếu đã có user (đăng nhập rồi), hoặc đang khôi phục thì thôi
     if (user?.socket || isRestoring) return;
 
     const restoreSession = async () => {
@@ -39,46 +50,69 @@ const Chat = () => {
       setIsRestoring(true);
 
       try {
-        //  Kết nối lại Socket
         const socket = io('http://localhost:8001');
-        
-        // Gửi lệnh login để lấy lại Keychain từ server
         socket.emit('login_token', { token: savedToken });
 
-        // Xử lý phản hồi (Dùng Promise để await cho gọn)
         await new Promise((resolve, reject) => {
           socket.on('login_success', async (data) => {
             try {
               const jwk = JSON.parse(savedKeyJson);
               const pwKey = await window.crypto.subtle.importKey(
-                  "jwk", jwk,
-                  { name: "AES-GCM", length: 256 },
-                  true, ["encrypt", "decrypt"]
+                "jwk", jwk,
+                { name: "AES-GCM", length: 256 },
+                true, ["encrypt", "decrypt"]
               );
 
-              // Giải mã Keychain bằng pwKey vừa khôi phục
               const pkg = JSON.parse(data.keychainDump);
               const iv = fromBase64(pkg.iv);
               const ciphertext = fromBase64(pkg.data);
-
               const keychainBuffer = await decryptWithGCM(pwKey, ciphertext, iv);
               const keychainJSON = new TextDecoder().decode(keychainBuffer);
 
               const client = new MessengerClient(null, null);
               const caKey = await window.crypto.subtle.importKey(
-                  "jwk", CA_PUBLIC_KEY,
-                  { name: "ECDSA", namedCurve: "P-384" },
-                  true, ["verify"]
+                "jwk", CA_PUBLIC_KEY,
+                { name: "ECDSA", namedCurve: "P-384" },
+                true, ["verify"]
               );
               client.caPublicKey = caKey;
+              const govKey = await window.crypto.subtle.importKey(
+                "jwk", GOV_PUBLIC_KEY,
+                { name: "ECDH", namedCurve: "P-384" },
+                true, []
+              );
+              client.govPublicKey = govKey;
               await client.deserializeState(keychainJSON);
+
+              // --- RESTORE KEYS (FIXED LOGIC) ---
+              for (const targetUsername in client.certs) {
+                const cert = client.certs[targetUsername];
+                if (cert.pk && !(cert.pk instanceof CryptoKey)) {
+                    cert.pk = await window.crypto.subtle.importKey("jwk", cert.pk, { name: "ECDH", namedCurve: "P-384" }, true, []);
+                }
+              }
+              for (const name in client.conns) {
+                const conn = client.conns[name];
+                if (conn.DHr && !(conn.DHr instanceof CryptoKey)) {
+                    conn.DHr = await window.crypto.subtle.importKey("jwk", conn.DHr, { name: "ECDH", namedCurve: "P-384" }, true, []);
+                }
+                if (conn.DHs) {
+                   if (conn.DHs.pub && !(conn.DHs.pub instanceof CryptoKey)) conn.DHs.pub = await window.crypto.subtle.importKey("jwk", conn.DHs.pub, { name: "ECDH", namedCurve: "P-384" }, true, []);
+                   if (conn.DHs.sec && !(conn.DHs.sec instanceof CryptoKey)) conn.DHs.sec = await window.crypto.subtle.importKey("jwk", conn.DHs.sec, { name: "ECDH", namedCurve: "P-384" }, true, ["deriveKey"]);
+                }
+                const hmacAlg = { name: 'HMAC', hash: 'SHA-256', length: 256 };
+                const fixHmac = async (k) => (k && !(k instanceof CryptoKey)) ? await window.crypto.subtle.importKey("jwk", k, hmacAlg, true, ["sign"]) : k;
+                conn.RK = await fixHmac(conn.RK);
+                conn.CKs = await fixHmac(conn.CKs);
+                conn.CKr = await fixHmac(conn.CKr);
+              }
+
               clientRef.current = client;
 
-              // Cập nhật lại Context
-              setUser({ 
-                username: data.username, 
+              setUser({
+                username: data.username,
                 socket,
-                pwKey, 
+                pwKey,
                 salt: fromBase64(pkg.salt)
               });
               resolve();
@@ -86,80 +120,101 @@ const Chat = () => {
               reject(e);
             }
           });
-
           socket.on('login_error', (err) => reject(err));
-          // Timeout sau 5s nếu server không trả lời
           setTimeout(() => reject("Timeout"), 5000);
         });
-
         setIsRestoring(false);
-        console.log("✅ Khôi phục thành công!");
-
       } catch (err) {
         console.error("Khôi phục thất bại:", err);
-        sessionStorage.clear(); // Xóa session lỗi
+        sessionStorage.clear();
         navigate('/login');
       }
     };
-
     restoreSession();
-  }, [user, navigate]); // Chỉ chạy khi user thay đổi (null -> có)
+  }, [user, navigate]);
 
-  // Auto scroll khi có tin nhắn mới
-  const scrollToBottom = () => {
+  // LOAD LỊCH SỬ CHAT TỪ LOCAL STORAGE
+  useEffect(() => {
+    if (!user?.username) return;
+    const storageKey = `CONVERSATIONS_${user.username}`;
+    const saved = localStorage.getItem(storageKey);
+    if (saved) {
+      try {
+        setConversations(JSON.parse(saved));
+      } catch (e) { console.error(e); }
+    }
+  }, [user?.username]);
+
+  // SAVE LỊCH SỬ KHI CÓ THAY ĐỔI
+  useEffect(() => {
+    if (!user?.username) return;
+    const storageKey = `CONVERSATIONS_${user.username}`;
+    localStorage.setItem(storageKey, JSON.stringify(conversations));
+  }, [conversations, user?.username]);
+
+  // Auto scroll
+  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
-  useEffect(scrollToBottom, [messages]);
+  }, [conversations, activeContact]);
 
-  // ĐỒNG BỘ KEYCHAIN
+  // Reset Unread khi chuyển tab
+  useEffect(() => {
+    if (activeContact && unread[activeContact]) {
+      setUnread(prev => ({ ...prev, [activeContact]: 0 }));
+    }
+  }, [activeContact]);
+
   const saveRatchetState = async () => {
-    if(!clientRef.current || !user?.pwKey) return;
-
+    if (!clientRef.current || !user?.pwKey) return;
     try {
-      // Serialize trạng thái hiện tại của MessagerClient
       const keychainRaw = await clientRef.current.serializeState();
-
-      // Mã hóa bằng key đăng nhập của user (pwKey từ login)
       const iv = genRandomSalt(12);
       const encryptKeychainBuffer = await encryptWithGCM(user.pwKey, keychainRaw, iv);
-
-      // Đóng gói
-      const encryptedKeychainPkg = JSON.stringify({
+      const pkg = JSON.stringify({
         iv: toBase64(iv),
         data: toBase64(new Uint8Array(encryptKeychainBuffer)),
         salt: toBase64(user.salt)
       });
+      user.socket.emit('update_keychain', { username: user.username, encryptedKeychain: pkg });
+    } catch (error) { console.error("Save keychain failed", error); }
+  };
 
-      // Gửi lên server để update state
-      user.socket.emit('update_keychain', { 
-          username: user.username, 
-          encryptedKeychain: encryptedKeychainPkg 
-      });
-      console.log("🔒 Ratchet State Saved!");
-    } catch (error) {
-      console.error("Lỗi lưu Keychain:", error);
+  // --- XỬ LÝ TIN NHẮN ĐẾN (Helper) ---
+  const handleIncomingMessage = (sender, content) => {
+    setConversations(prev => {
+        const currentList = prev[sender] || [];
+        return {
+            ...prev,
+            [sender]: [...currentList, { sender, content }]
+        };
+    });
+
+    // Nếu không phải tab đang mở thì tăng unread
+    if (sender !== activeContact) {
+        setUnread(prev => ({
+            ...prev,
+            [sender]: (prev[sender] || 0) + 1
+        }));
     }
   };
 
-  // --- LẮNG NGHE SỰ KIỆN TỪ SERVER ---
+  // --- SOCKET LISTENERS ---
   useEffect(() => {
     if (!user?.socket) return;
 
-    // Nhận tin nhắn E2E
     user.socket.on('receive_message', async (data) => {
       try {
-        // Handshake: Nếu chưa có Cert (publickey) của người gửi, phải lấy ngay
         if (!clientRef.current.certs[data.from]) {
-           await fetchAndImportCert(data.from);
+          await fetchAndImportCert(data.from);
         }
 
-        // GIẢI MÃ: Double Ratchet xử lý (messenger.js)
+        const ciphertextBuffer = fromBase64(data.payload.ciphertext);
+
         const plaintext = await clientRef.current.receiveMessage(
-          data.from, 
-          [data.payload.header, data.payload.ciphertext]
+          data.from,
+          [data.payload.header, ciphertextBuffer]
         );
 
-        // Parse nội dung (Text hoặc File JSON)
         let content;
         try {
           const jsonContent = JSON.parse(plaintext);
@@ -168,46 +223,46 @@ const Chat = () => {
           content = { type: 'TEXT', text: plaintext };
         }
 
-        setMessages(prev => [...prev, { sender: data.from, content }]);
-        
-        // Lưu trạng thái Ratchet mới ngay sau khi nhận tin
+        handleIncomingMessage(data.from, content);
         await saveRatchetState();
       } catch (err) {
-        console.error("Lỗi giải mã tin nhắn đến:", err);
+        console.error("Lỗi giải mã:", err);
       }
     });
 
-    // Nhận tin nhắn cũ (offline messages) khi vừa mới login
     user.socket.on('offline_messages', async (msgs) => {
-      console.log(`Đang tải ${msgs.length} tin nhắn offline...`);
-      for(const msg of msgs) {
+      // Logic xử lý offline messages: Cập nhật vào từng conversation tương ứng
+      let needsSave = false;
+      for (const msg of msgs) {
         try {
-          if (!clientRef.current.certs[msg.from]) {
-            await fetchAndImportCert(msg.from);
-          }
+          if (!clientRef.current.certs[msg.from]) await fetchAndImportCert(msg.from);
+
+          const ciphertextBuffer = fromBase64(msg.payload.ciphertext);
           const plaintext = await clientRef.current.receiveMessage(
             msg.from, 
-            [msg.payload.header, msg.payload.ciphertext]
+            [msg.payload.header, ciphertextBuffer]
           );
+          
           let content;
           try {
-            const jsonContent = JSON.parse(plaintext);
-            content = jsonContent.type ? jsonContent : { type: 'TEXT', text: plaintext };
-          } catch {
-            content = { type: 'TEXT', text: plaintext };
-          }
-          setMessages(prev => [...prev, { sender: msg.from, content }]);
-        } catch (error) {
-          console.error("Lỗi giải mã tin offline:", e);
-        }
+             const j = JSON.parse(plaintext);
+             content = j.type ? j : { type: 'TEXT', text: plaintext };
+          } catch { content = { type: 'TEXT', text: plaintext }; }
+
+          // Cập nhật state (lưu ý state update trong loop cần functional update cẩn thận)
+          setConversations(prev => ({
+              ...prev,
+              [msg.from]: [...(prev[msg.from] || []), { sender: msg.from, content }]
+          }));
+          setUnread(prev => ({ ...prev, [msg.from]: (prev[msg.from] || 0) + 1 }));
+          needsSave = true;
+        } catch (e) { console.error(e); }
       }
-      // Xử lý xong hết offline message thì lưu state 1 lần
-      if(msgs.length > 0) await saveRatchetState();
+      if (needsSave) await saveRatchetState();
     });
-    
-    // Nhận tin từ AI
+
     user.socket.on('ai_response', (data) => {
-      setMessages(prev => [...prev, { sender: 'Gemini AI', content: { type: 'TEXT', text: data.text } }]);
+        handleIncomingMessage('Gemini AI', { type: 'TEXT', text: data.text });
     });
 
     return () => {
@@ -215,339 +270,237 @@ const Chat = () => {
       user.socket.off('offline_messages');
       user.socket.off('ai_response');
     };
-  }, [user]);
+  }, [user, activeContact]); // activeContact trong dep để check unread chính xác
 
-  // --- CÁC HÀM HỖ TRỢ (HANDSHAKE & FILE) ---
   const fetchAndImportCert = async (targetUsername) => {
     return new Promise((resolve, reject) => {
-      // Emit sự kiện lấy certificate (Cần server hỗ trợ sự kiện này hoặc dùng API)
       user.socket.emit('get_certificate', targetUsername, async (response) => {
-        // response: { username, pk } (pk là JWK)
-        if (!response || !response.pk || !response.signature) {
-            alert(`⚠️ CẢNH BÁO BẢO MẬT: Không nhận được chứng chỉ hợp lệ của ${targetUsername}.`);
-            return resolve(false);
-          }
+        if (!response || !response.pk) {
+          alert(`Không tìm thấy user ${targetUsername}`);
+          return resolve(false);
+        }
+        try {
+          const certRaw = JSON.stringify({ username: response.username, pk: response.pk });
+          const isValid = await verifyWithECDSA(clientRef.current.caPublicKey, certRaw, fromBase64(response.signature));
+          if (!isValid) return resolve(false);
 
-          try {
-            console.log(`🔍 Đang xác thực danh tính của ${targetUsername}...`);
-
-            // 2. Tái tạo chuỗi dữ liệu gốc (phải khớp 100% với server)
-            // Cấu trúc: { username, pk }
-            const certRaw = JSON.stringify({ 
-              username: response.username, 
-              pk: response.pk 
-            });
-
-            // 3. Thực hiện Verify Chữ ký
-            const signatureBuffer = fromBase64(response.signature);
-            const isValid = await verifyWithECDSA(
-              clientRef.current.caPublicKey, // Dùng Key Root để check
-              certRaw,
-              signatureBuffer
-            );
-
-            if (!isValid) {
-              // PHÁT HIỆN GIẢ MẠO -> DỪNG NGAY LẬP TỨC
-              const msg = `⛔ BÁO ĐỘNG ĐỎ: Phát hiện giả mạo chữ ký của ${targetUsername}! Có thể đang bị tấn công Man-in-the-Middle.`;
-              console.error(msg);
-              alert(msg);
-              return resolve(false);
-            }
-
-            console.log("✅ Chữ ký hợp lệ. Tin tưởng Import Key.");
-
-            // 4. Import Key
-            const importedKey = await window.crypto.subtle.importKey(
-              "jwk", response.pk, 
-              { name: "ECDH", namedCurve: "P-384" }, 
-              true, []
-            );
-
-            clientRef.current.certs[targetUsername] = {
-              username: targetUsername,
-              pk: importedKey
-            };
-            resolve(true);
-
-          } catch (e) {
-            console.error("Lỗi xác thực:", e);
-            reject(e);
-          }
+          const importedKey = await window.crypto.subtle.importKey("jwk", response.pk, { name: "ECDH", namedCurve: "P-384" }, true, []);
+          clientRef.current.certs[targetUsername] = { username: targetUsername, pk: importedKey };
+          resolve(true);
+        } catch (e) { reject(e); }
       });
     });
   };
 
   const handleDownloadDecrypt = async (fileContent) => {
     try {
-      // 1. Tải file mã hóa từ server
       const response = await fetch(fileContent.url);
       const encryptedBlob = await response.blob();
-      
-      // 2. Lấy key/iv từ tin nhắn E2E
       const key = fromBase64(fileContent.key);
       const iv = fromBase64(fileContent.iv);
-      
-      // 3. Giải mã file ở phía Client (Browser)
       const decryptedBlob = await decryptFile(encryptedBlob.arrayBuffer(), key, iv, fileContent.mimeType);
-      
-      // 4. Tạo link download
       const url = URL.createObjectURL(decryptedBlob);
       const a = document.createElement('a');
-      a.href = url;
-      a.download = fileContent.fileName;
-      a.click();
+      a.href = url; a.download = fileContent.fileName; a.click();
       URL.revokeObjectURL(url);
-    } catch (e) {
-        console.error(e);
-        alert("Lỗi tải hoặc giải mã file.");
-    }
+    } catch (e) { alert("Lỗi tải file."); }
   }
 
-  // --- 3. GỬI TIN NHẮN (MÃ HÓA & GỬI) ---
+  const handleStartChat = () => {
+      if (!searchUser) return;
+      if (!conversations[searchUser]) {
+          setConversations(prev => ({ ...prev, [searchUser]: [] }));
+      }
+      setActiveContact(searchUser);
+      setSearchUser('');
+  }
+
   const handleSend = async () => {
-    if ((!input && !fileInputRef.current?.files[0])) return;
-    
+    if ((!input && !fileInputRef.current?.files[0]) || !activeContact) return;
+
     // A. Chat AI
-    if (isAiMode) {
+    if (activeContact === 'Gemini AI') {
         user.socket.emit('ask_ai', { prompt: input });
-        setMessages(prev => [...prev, { sender: 'Me', content: { type: 'TEXT', text: input } }]);
+        setConversations(prev => ({
+            ...prev,
+            'Gemini AI': [...(prev['Gemini AI']||[]), { sender: 'Me', content: { type: 'TEXT', text: input } }]
+        }));
         setInput('');
         return;
     }
 
-    if (!targetUser) return alert("Chưa nhập người nhận!");
+    // B. Chat E2E
+    if (!clientRef.current.certs[activeContact]) {
+      const success = await fetchAndImportCert(activeContact);
+      if (!success) return;
+    }
 
-    // B. Chat E2E - Kiểm tra Handshake
-    if (!clientRef.current.certs[targetUser]) {
-        try {
-            console.log(`Đang lấy Public Key của ${targetUser}...`);
-            const success = await fetchAndImportCert(targetUser);
-            if(!success) return alert("Không tìm thấy người dùng này!");
-        } catch (e) {
-            return alert("Lỗi kết nối tới người dùng.");
-        }
+    // Fix Cert Check
+    const targetCert = clientRef.current.certs[activeContact];
+    if (targetCert?.pk && !(targetCert.pk instanceof CryptoKey)) {
+        targetCert.pk = await window.crypto.subtle.importKey("jwk", targetCert.pk, { name: "ECDH", namedCurve: "P-384" }, true, []);
     }
 
     let finalContent = input;
     let displayContent = { type: 'TEXT', text: input };
 
-    // C. Xử lý File (nếu có)
     const file = fileInputRef.current?.files[0];
     if (file) {
       try {
-          // Mã hóa file cục bộ
-          const { encryptedBlob, key, iv, type } = await encryptFile(file);
-          
-          // Upload file mã hóa lên server (qua REST API cho nhanh)
-          const formData = new FormData();
-          formData.append('encryptedFile', encryptedBlob, file.name);
-          
-          const res = await axios.post('http://localhost:8001/api/upload', formData);
-          
-          // Tạo payload chứa thông tin để giải mã (Key file sẽ được mã hóa E2E)
-          const filePayload = {
-            type: 'FILE',
-            url: res.data.url,
-            fileName: file.name,
-            mimeType: type,
-            key: toBase64(key), // Key AES dùng để giải mã file
-            iv: toBase64(iv)
-          };
-          
-          // Chuyển thành string để encryption hàm sendMessage xử lý
-          finalContent = JSON.stringify(filePayload);
-          displayContent = filePayload;
-      } catch (e) {
-          console.error(e);
-          alert("Upload file thất bại.");
-          return;
-      }
+        const { encryptedBlob, key, iv, type } = await encryptFile(file);
+        const formData = new FormData();
+        formData.append('encryptedFile', encryptedBlob, file.name);
+        const res = await axios.post('http://localhost:8001/api/upload', formData);
+        const filePayload = {
+          type: 'FILE',
+          url: res.data.url,
+          fileName: file.name,
+          mimeType: type,
+          key: toBase64(key),
+          iv: toBase64(iv)
+        };
+        finalContent = JSON.stringify(filePayload);
+        displayContent = filePayload;
+      } catch (e) { return alert("Upload thất bại"); }
     }
 
-    // D. Mã hóa E2E & Gửi
     try {
-      // 1. MessengerClient thực hiện Ratchet và Mã hóa
-      const [header, ciphertext] = await clientRef.current.sendMessage(targetUser, finalContent);
+      const [headerStr, ciphertext] = await clientRef.current.sendMessage(activeContact, finalContent);
+      const ciphertextB64 = toBase64(new Uint8Array(ciphertext));
 
-      // 2. Gửi gói tin qua Socket
-      user.socket.emit('private_message', {
-        to: targetUser,
-        header, 
-        ciphertext 
-      });
+      user.socket.emit('private_message', { 
+          to: activeContact,
+          header: headerStr,
+          ciphertext: ciphertextB64
+        }
+      );
 
-      // 3. Cập nhật UI
-      setMessages(prev => [...prev, { sender: 'Me', content: displayContent }]);
+      // Update Local Chat
+      setConversations(prev => ({
+          ...prev,
+          [activeContact]: [...(prev[activeContact]||[]), { sender: 'Me', content: displayContent }]
+      }));
+
       setInput('');
       if (fileInputRef.current) fileInputRef.current.value = null;
-
-      // 4. QUAN TRỌNG: Lưu trạng thái Ratchet mới
       await saveRatchetState();
-
     } catch (err) {
-      console.error("Lỗi gửi tin:", err);
-      alert("Lỗi mã hóa: " + err.message);
+      console.error(err);
+      alert("Lỗi gửi tin: " + err.message);
     }
   };
 
-  // --- MÀN HÌNH CHỜ KHI ĐANG KHÔI PHỤC ---
-  if (isRestoring || (!user && sessionStorage.getItem('SECURE_CHAT_USER'))) {
-    return (
-        <div className="flex h-screen w-full items-center justify-center bg-slate-900 text-white">
-            <div className="text-center animate-pulse">
-                <div className="text-4xl mb-4">🔐</div>
-                <p className="text-lg font-semibold text-cyan-400">Đang khôi phục khóa bảo mật...</p>
-                <p className="text-xs text-slate-500 mt-2">Vui lòng đợi giây lát</p>
-            </div>
-        </div>
-    );
-  }
+  if (isRestoring || !user) return <div className="text-white text-center mt-20">Đang tải...</div>;
+
   return (
     <div className="flex h-screen overflow-hidden bg-slate-900 text-slate-100">
       
       {/* SIDEBAR */}
       <div className="w-80 shrink-0 border-r border-slate-700 bg-slate-800/50 flex flex-col">
-        {/* User Profile */}
-        <div className="p-6 border-b border-slate-700">
-          <div className="flex items-center space-x-3">
-            <div className="h-10 w-10 rounded-full bg-linear-to-tr from-indigo-500 to-purple-500 flex items-center justify-center font-bold text-white shadow-lg">
-              {user?.username?.charAt(0).toUpperCase()}
-            </div>
-            <div>
-              <h3 className="font-bold text-white">{user?.username}</h3>
-              <div className="flex items-center text-xs text-emerald-400">
-                <span className="mr-1.5 h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                Online
-              </div>
-            </div>
-          </div>
+        <div className="p-4 border-b border-slate-700">
+             <div className="flex items-center space-x-3 mb-4">
+                <div className="h-10 w-10 rounded-full bg-indigo-500 flex items-center justify-center font-bold">
+                    {user.username.charAt(0).toUpperCase()}
+                </div>
+                <div><h3 className="font-bold">{user.username}</h3></div>
+             </div>
+             
+             {/* Tìm người dùng mới */}
+             <div className="flex gap-2">
+                 <input 
+                    className="flex-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-sm"
+                    placeholder="Tìm user..."
+                    value={searchUser}
+                    onChange={e => setSearchUser(e.target.value)}
+                 />
+                 <button onClick={handleStartChat} className="bg-indigo-600 px-3 rounded text-sm">+</button>
+             </div>
         </div>
 
-        {/* Search / Target Input */}
-        <div className="p-4 space-y-4">
-          <div>
-            <label className="mb-1 block text-xs font-semibold uppercase text-slate-500">Người nhận</label>
-            <input 
-              className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none transition"
-              placeholder="Nhập username..." 
-              value={targetUser}
-              onChange={e => setTargetUser(e.target.value)}
-              disabled={isAiMode}
-            />
-          </div>
+        {/* Danh sách phòng chat */}
+        <div className="flex-1 overflow-y-auto custom-scrollbar">
+            {/* AI Room */}
+            <div 
+                onClick={() => setActiveContact('Gemini AI')}
+                className={`p-3 cursor-pointer hover:bg-slate-700 flex justify-between items-center ${activeContact === 'Gemini AI' ? 'bg-slate-700 border-l-4 border-indigo-500' : ''}`}
+            >
+                <span>🤖 Gemini AI</span>
+                {unread['Gemini AI'] > 0 && <span className="bg-red-500 text-xs rounded-full px-2 py-0.5">{unread['Gemini AI']}</span>}
+            </div>
 
-          {/* AI Toggle */}
-          <div 
-            onClick={() => setIsAiMode(!isAiMode)}
-            className={`cursor-pointer rounded-lg p-3 border transition-all duration-200 flex items-center space-x-3 ${isAiMode ? 'bg-indigo-600/20 border-indigo-500/50' : 'bg-slate-900 border-slate-700 hover:border-slate-500'}`}
-          >
-            <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${isAiMode ? 'bg-indigo-500 text-white' : 'bg-slate-700 text-slate-400'}`}>
-              🤖
-            </div>
-            <div className="flex-1">
-              <div className={`font-medium text-sm ${isAiMode ? 'text-indigo-300' : 'text-slate-300'}`}>Gemini AI</div>
-              <div className="text-xs text-slate-500">Trợ lý ảo thông minh</div>
-            </div>
-            {isAiMode && <div className="h-2 w-2 rounded-full bg-indigo-400 shadow-[0_0_8px_rgba(129,140,248,0.8)]"></div>}
-          </div>
+            {/* User Rooms */}
+            {Object.keys(conversations).filter(u => u !== 'Gemini AI').map(username => (
+                <div 
+                    key={username}
+                    onClick={() => setActiveContact(username)}
+                    className={`p-3 cursor-pointer hover:bg-slate-700 flex justify-between items-center ${activeContact === username ? 'bg-slate-700 border-l-4 border-indigo-500' : ''}`}
+                >
+                    <div className="flex items-center gap-2">
+                         <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
+                         <span>{username}</span>
+                    </div>
+                    {unread[username] > 0 && (
+                        <span className="bg-red-500 text-xs rounded-full h-5 w-5 flex items-center justify-center">
+                            {unread[username]}
+                        </span>
+                    )}
+                </div>
+            ))}
         </div>
       </div>
 
       {/* CHAT MAIN AREA */}
-      <div className="flex flex-1 flex-col bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-slate-900 via-slate-900 to-[#0f172a]">
-        
+      <div className="flex flex-1 flex-col bg-slate-900">
         {/* Header */}
-        <div className="flex h-16 items-center border-b border-slate-700/50 bg-slate-900/50 px-6 backdrop-blur-md">
-            {isAiMode ? (
-                 <span className="font-semibold text-indigo-400 flex items-center gap-2">✨ Đang chat với Gemini AI</span>
-            ) : targetUser ? (
-                 <span className="font-semibold text-slate-100 flex items-center gap-2">🔒 Chatting with: <span className="text-white">{targetUser}</span></span>
-            ) : (
-                 <span className="text-slate-500 italic">Chưa chọn người nhận</span>
-            )}
+        <div className="h-14 border-b border-slate-700 flex items-center px-6 bg-slate-800">
+            {activeContact ? (
+                <span className="font-bold text-lg">{activeContact === 'Gemini AI' ? '✨ Chat với AI' : `🔒 ${activeContact}`}</span>
+            ) : <span className="text-slate-500">Chọn một cuộc hội thoại</span>}
         </div>
 
-        {/* Messages List */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar">
-          {messages.length === 0 && (
-            <div className="flex h-full flex-col items-center justify-center text-slate-500 opacity-60">
-              <div className="text-6xl mb-4">🛡️</div>
-              <p>Tin nhắn được mã hóa đầu cuối (E2E).</p>
-              <p className="text-sm">Không ai (kể cả server) đọc được nội dung này.</p>
-            </div>
-          )}
-
-          {messages.map((msg, index) => {
-            const isMe = msg.sender === 'Me';
-            return (
-              <div key={index} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
-                <div className={`group relative max-w-[70%] rounded-2xl px-5 py-3 text-sm shadow-md transition-all ${
-                  isMe 
-                    ? 'rounded-tr-sm bg-indigo-600 text-white' 
-                    : 'rounded-tl-sm bg-slate-700 text-slate-100'
-                }`}>
-                  <div className={`mb-1 text-[10px] font-bold uppercase tracking-wider opacity-70 ${isMe ? 'text-indigo-200' : 'text-slate-400'}`}>
-                    {msg.sender}
-                  </div>
-                  
-                  {msg.content.type === 'TEXT' ? (
-                    <p className="leading-relaxed">{msg.content.text}</p>
-                  ) : (
-                    <div className="flex items-center gap-3">
-                      <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-black/20 text-xl">
-                        {/* Icon file */}
-                        📄
-                      </div>
-                      <div className="flex flex-col">
-                        <span className="font-medium truncate max-w-40">{msg.content.fileName}</span>
-                        <button 
-                            onClick={() => handleDownloadDecrypt(msg.content)}
-                            className="text-xs font-bold text-indigo-300 hover:text-indigo-100 underline mt-1 text-left"
-                        >
-                            Tải & Giải mã
-                        </button>
-                      </div>
-                    </div>
-                  )}
+        {/* Message List */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+            {!activeContact && (
+                <div className="h-full flex items-center justify-center text-slate-600">
+                    <div>Chào mừng quay trở lại!</div>
                 </div>
-              </div>
-            );
-          })}
-          <div ref={messagesEndRef} />
+            )}
+            
+            {activeMessages.map((msg, i) => {
+                const isMe = msg.sender === 'Me';
+                return (
+                    <div key={i} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
+                         <div className={`max-w-[70%] rounded-lg px-4 py-2 ${isMe ? 'bg-indigo-600' : 'bg-slate-700'}`}>
+                            {msg.content.type === 'TEXT' ? (
+                                <p>{msg.content.text}</p>
+                            ) : (
+                                <div className="flex items-center gap-2">
+                                    <span>📄 {msg.content.fileName}</span>
+                                    <button onClick={() => handleDownloadDecrypt(msg.content)} className="underline text-indigo-300 text-sm">Tải về</button>
+                                </div>
+                            )}
+                         </div>
+                    </div>
+                )
+            })}
+            <div ref={messagesEndRef} />
         </div>
 
-        {/* Input Area */}
-        <div className="p-4 border-t border-slate-700/50 bg-slate-900/50 backdrop-blur-md">
-          <div className="flex items-center gap-3 rounded-xl bg-slate-800 p-2 ring-1 ring-slate-700 focus-within:ring-2 focus-within:ring-indigo-500 transition-all">
-            <button 
-                onClick={() => fileInputRef.current.click()}
-                className="flex h-10 w-10 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-700 hover:text-white transition"
-                title="Gửi file"
-            >
-              📎
-            </button>
-            <input 
-                type="file" 
-                ref={fileInputRef} 
-                className="hidden" 
-            />
-            
-            <input 
-              className="flex-1 bg-transparent px-2 text-sm text-white placeholder-slate-500 focus:outline-none"
-              placeholder="Nhập tin nhắn..."
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyPress={e => e.key === 'Enter' && handleSend()}
-            />
-            
-            <button 
-                onClick={handleSend}
-                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 active:scale-95 transition"
-            >
-              Gửi
-            </button>
-          </div>
-        </div>
+        {/* Input */}
+        {activeContact && (
+            <div className="p-4 border-t border-slate-700 bg-slate-800 flex gap-2">
+                <button onClick={() => fileInputRef.current.click()} className="text-slate-400 hover:text-white">📎</button>
+                <input type="file" ref={fileInputRef} className="hidden" />
+                <input 
+                    className="flex-1 bg-slate-900 rounded px-3 py-2 outline-none border border-slate-700 focus:border-indigo-500"
+                    placeholder="Nhập tin nhắn..."
+                    value={input}
+                    onChange={e => setInput(e.target.value)}
+                    onKeyPress={e => e.key === 'Enter' && handleSend()}
+                />
+                <button onClick={handleSend} className="bg-indigo-600 px-4 rounded font-bold">Gửi</button>
+            </div>
+        )}
       </div>
     </div>
   );

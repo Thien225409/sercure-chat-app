@@ -10,10 +10,10 @@ export const CA_PUBLIC_KEY = {
 };
 
 export const GOV_PUBLIC_KEY = {
-    // Placeholder Gov Key (ECDH P-384)
-    "crv": "P-384",
+    "key_ops": [],
     "ext": true,
     "kty": "EC",
-    "x": "ImWatchingYou",
-    "y": "ImWatchingYou"
+    "x": "P_s8f356xf3_U9TXmpqGCDCLc_n8RKgYb86iRCaZgjA3bNfqlqVtelQ0mQPG5s7e",
+    "y": "oYBUVnW0P7TerpBTwFndXRxy6TYST3jqbJ9eiKVZSn_Oo-hIWWe7e7OIkBQ1UVtv",
+    "crv": "P-384"
 };
