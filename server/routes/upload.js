@@ -29,7 +29,6 @@ router.post('/', upload.single('encryptedFile'), (req, res) => {
     }
     
     // Trả về đường dẫn file để client gửi qua tin nhắn chat
-    // Ví dụ: http://localhost:3000/uploads/filename.enc
     const fileUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
     
     res.json({ 

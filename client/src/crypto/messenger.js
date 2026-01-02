@@ -15,7 +15,7 @@ import {
   decryptWithGCM,
   cryptoKeyToJSON, // async
   govEncryptionDataStr,
-  toBase64,   
+  toBase64,
   fromBase64
 } from './lib.js';
 
@@ -177,7 +177,7 @@ export class MessengerClient {
       state.RK = newRK; state.CKs = newCKs; state.PN = state.NS; state.NS = 0
     }
 
-    // Symmetric Ratchet & Gov Encryption ... (Giữ nguyên) ...
+    // Symmetric Ratchet & Gov Encryption
     const mk = await HMACtoAESKey(state.CKs, govEncryptionDataStr)
     const mkRaw = await HMACtoAESKey(state.CKs, govEncryptionDataStr, true)
     const nextCKs = await HMACtoHMACKey(state.CKs, 'ratchet-str')
@@ -195,9 +195,9 @@ export class MessengerClient {
       vGov: await cryptoKeyToJSON(govPair.pub),
       cGov: toBase64(cGov),
       ivGov: toBase64(ivGov),
-      receiverIV: toBase64(receiverIV), 
+      receiverIV: toBase64(receiverIV),
       dh: dhPublicKeyJWK,
-      N: state.NS, 
+      N: state.NS,
       PN: state.PN
     }
 
@@ -209,70 +209,89 @@ export class MessengerClient {
   }
 
   async receiveMessage(name, [headerStr, ciphertext]) {
+    // 1. Kiểm tra input chặt chẽ
     if (typeof headerStr !== 'string') {
-        throw new Error("Critical Error: Protocol violation. Header must be a raw JSON string to verify integrity.");
+      throw new Error("Critical Error: Protocol violation. Header must be a raw JSON string.");
     }
 
     const header = JSON.parse(headerStr);
-    
     const { subtle } = window.crypto;
-
     const receiverIVBinary = fromBase64(header.receiverIV);
 
-    // Import Key từ Header
+    // 2. Import Key từ Header
     const dhRemoteKey = await subtle.importKey(
       'jwk', header.dh, { name: 'ECDH', namedCurve: 'P-384' }, true, []
     );
 
+    // 3. Khởi tạo kết nối nếu chưa có
     if (!this.conns[name]) {
       const otherCert = this.certs[name]
-      if (!otherCert) throw new Error('Unknown user certificate!')
+      if (!otherCert) throw new Error(`Unknown user certificate for ${name}!`)
+
+      // Initial Handshake: Compute DH with Identity Keys
       const sk = await computeDH(this.EGKeyPair.sec, otherCert.pk)
       const [rk, ckr] = await HKDF(sk, await computeDH(this.EGKeyPair.sec, dhRemoteKey), 'ratchet-str')
-      this.conns[name] = { 
-        DHs: this.EGKeyPair, 
-        DHr: dhRemoteKey, 
-        RK: rk, 
-        CKs: null, 
-        CKr: ckr, 
-        NS: 0, 
-        NR: 0, 
-        PN: 0, 
-        skippedKeys: {} 
+      this.conns[name] = {
+        DHs: this.EGKeyPair, DHr: dhRemoteKey, RK: rk, CKs: null, CKr: ckr, NS: 0, NR: 0, PN: 0, skippedKeys: {}
       }
     }
-    const state = this.conns[name]
 
-    // Skipped Keys
-    const headerDHJson = JSON.stringify(header.dh); 
+    const originalState = this.conns[name];
+    // Clone state object
+    const state = {
+      ...originalState,
+      skippedKeys: { ...originalState.skippedKeys }
+    };
+
+    // Lấy key hiện tại trong máy ra
+    const oldDHKey = await cryptoKeyToJSON(state.DHr);
+
+    // Kiểm tra xem Sender có đổi Key không
+    const isSameKey = (header.dh.x === oldDHKey.x) && (header.dh.y === oldDHKey.y);
+
+    const headerDHJson = isSameKey ? JSON.stringify(oldDHKey) : JSON.stringify(header.dh);
+
+    // 4. Kiểm tra xem tin nhắn này có nằm trong skippedKeys không
     const skipKeyIndex = headerDHJson + ':' + header.N
 
     if (state.skippedKeys[skipKeyIndex]) {
       const mk = state.skippedKeys[skipKeyIndex]
-      delete state.skippedKeys[skipKeyIndex] 
+      delete state.skippedKeys[skipKeyIndex]
+
       try {
         const plaintext = await decryptWithGCM(mk, ciphertext, receiverIVBinary, headerStr)
+        // **COMMIT STATE**
+        this.conns[name].skippedKeys = state.skippedKeys;
         return bufferToString(plaintext)
       } catch (e) {
         throw new Error('Decryption failed! Message tampered or wrong key.')
       }
     }
+    if (isSameKey && header.N < state.NR) {
+      throw new Error("Message already processed");
+    }
 
-    // -- KIỂM TRA DH RATCHET ---
-    const oldDHJson = JSON.stringify(await cryptoKeyToJSON(state.DHr))
+    // 5. Xử lý DH Ratchet 
+    if (!isSameKey) {
+      const oldDHJsonForSkip = JSON.stringify(oldDHKey);
 
-    if (headerDHJson !== oldDHJson) {
       for (let i = state.NR; i < header.PN; i++) {
         const mkSkipped = await HMACtoAESKey(state.CKr, govEncryptionDataStr)
         state.CKr = await HMACtoHMACKey(state.CKr, 'ratchet-str')
-        state.skippedKeys[oldDHJson + ':' + i] = mkSkipped
+        state.skippedKeys[oldDHJsonForSkip + ':' + i] = mkSkipped
       }
+
       const dhSecret = await computeDH(state.DHs.sec, dhRemoteKey)
       const [newRK, newCKr] = await HKDF(state.RK, dhSecret, 'ratchet-str')
-      state.RK = newRK; state.CKr = newCKr; state.DHr = dhRemoteKey; state.CKs = null; state.NR = 0 
+
+      state.RK = newRK;
+      state.CKr = newCKr;
+      state.DHr = dhRemoteKey;
+      state.CKs = null;
+      state.NR = 0;
     }
 
-    // --- SYMMETRIC RATCHET ---
+    // 6. Symmetric Ratchet
     while (state.NR < header.N) {
       const mkSkipped = await HMACtoAESKey(state.CKr, govEncryptionDataStr)
       state.CKr = await HMACtoHMACKey(state.CKr, 'ratchet-str')
@@ -280,19 +299,23 @@ export class MessengerClient {
       state.NR++
     }
 
-    // --- GIẢI MÃ ---
+    // 7. Giải mã tin nhắn hiện tại
     const mk = await HMACtoAESKey(state.CKr, govEncryptionDataStr)
     const nextCKr = await HMACtoHMACKey(state.CKr, 'ratchet-str')
     state.CKr = nextCKr
-    state.NR++ 
+    state.NR++
 
     try {
       const plaintext = await decryptWithGCM(mk, ciphertext, receiverIVBinary, headerStr)
+
+      // **COMMIT STATE**: Chỉ khi giải mã thành công mới lưu ngược lại vào this.conns
+      this.conns[name] = state;
+
       return bufferToString(plaintext)
     } catch (e) {
       console.error(e);
+      // Không commit state -> Lần sau nhận lại sẽ thử lại từ đầu
       throw new Error('Decryption failed! Message tampered or wrong key.')
     }
   }
 };
-
