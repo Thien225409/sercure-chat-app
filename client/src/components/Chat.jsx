@@ -9,10 +9,12 @@ import {
 } from '../crypto/lib';
 import { CA_PUBLIC_KEY, GOV_PUBLIC_KEY } from '../config';
 import io from 'socket.io-client';
-import { deriveKeyFromPassword } from '../utils';
+
 import { MessengerClient } from '../crypto/messenger';
 import EmojiPicker from 'emoji-picker-react';
 import ReactMarkdown from 'react-markdown';
+import { toast } from 'react-toastify';
+
 
 const Chat = () => {
   const { clientRef, user, setUser } = useContext(ClientContext);
@@ -32,6 +34,18 @@ const Chat = () => {
   const [menuOpenId, setMenuOpenId] = useState(null);
   const [typingUsers, setTypingUsers] = useState(new Set());
   const [chatStatus, setChatStatus] = useState({});
+  const [selectedFile, setSelectedFile] = useState(null);
+
+  const handleFileChange = (e) => {
+    if (e.target.files && e.target.files[0]) {
+      setSelectedFile(e.target.files[0]);
+    }
+  };
+
+  const clearSelectedFile = () => {
+    setSelectedFile(null);
+    if (fileInputRef.current) fileInputRef.current.value = null;
+  };
 
   const fileInputRef = useRef(null);
   const messagesEndRef = useRef(null);
@@ -137,7 +151,7 @@ const Chat = () => {
           if (data.encryptedHistory) await decryptAndLoad(data.encryptedHistory);
           setIsHistoryLoaded(true);
         });
-        setTimeout(() => setIsHistoryLoaded(true), 3000);
+        setTimeout(() => setIsHistoryLoaded(true), 3000); // Timeout
       }
     };
     loadHistory();
@@ -155,6 +169,7 @@ const Chat = () => {
         });
         localStorage.setItem(`CONVERSATIONS_${user.username}`, pkg);
 
+        // Sync lên server (backup)
         if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
         syncTimeoutRef.current = setTimeout(() => {
           if (user?.socket) user.socket.emit('upload_history', { username: user.username, encryptedHistory: pkg });
@@ -193,6 +208,21 @@ const Chat = () => {
     });
     if (sender !== activeContact) {
       setUnread(prev => ({ ...prev, [sender]: (prev[sender] || 0) + 1 }));
+
+      // Notify user
+      const previewText = content.type === 'FILE' ? 'đã gửi một tệp tin 📁' : (content.text.length > 30 ? content.text.substring(0, 30) + '...' : content.text);
+      toast(
+        <div className="flex items-center gap-3 w-full" onClick={() => setActiveContact(sender)}>
+          <div className="h-10 w-10 min-w-[2.5rem] rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center font-bold text-white shadow-md">
+            {sender.charAt(0).toUpperCase()}
+          </div>
+          <div className="flex flex-col overflow-hidden">
+            <span className="font-bold text-indigo-300 truncate">{sender}</span>
+            <span className="text-slate-300 text-xs truncate">{previewText}</span>
+          </div>
+        </div>,
+        { icon: false, closeButton: false }
+      );
     } else {
       if (user?.socket) user.socket.emit('msg_seen_status', { to: sender });
     }
@@ -307,7 +337,7 @@ const Chat = () => {
   };
 
   const handleSend = async () => {
-    if ((!input && !fileInputRef.current?.files[0]) || !activeContact) return;
+    if ((!input && !selectedFile) || !activeContact) return;
 
     if (activeContact === 'Gemini AI') {
       const history = conversations['Gemini AI'] || [];
@@ -320,6 +350,7 @@ const Chat = () => {
       return;
     }
 
+    // 1. Ensure Key Exchange First
     if (!clientRef.current.certs[activeContact]) {
       const success = await fetchAndImportCert(activeContact);
       if (!success) return;
@@ -329,31 +360,65 @@ const Chat = () => {
       targetCert.pk = await window.crypto.subtle.importKey("jwk", targetCert.pk, { name: "ECDH", namedCurve: "P-384" }, true, []);
     }
 
-    let finalContent = input;
-    let displayContent = { type: 'TEXT', text: input };
-    const file = fileInputRef.current?.files[0];
-    if (file) {
+    // Helper to send a single payload wrapper
+    const sendPayload = async (contentPayload, uiContent) => {
       try {
-        const { encryptedBlob, key, iv, type } = await encryptFile(file);
+        const payloadStr = typeof contentPayload === 'string' ? contentPayload : JSON.stringify(contentPayload);
+        const [headerStr, ciphertext] = await clientRef.current.sendMessage(activeContact, payloadStr);
+
+        user.socket.emit('private_message', {
+          to: activeContact,
+          header: headerStr,
+          ciphertext: toBase64(new Uint8Array(ciphertext))
+        });
+
+        setConversations(prev => ({
+          ...prev,
+          [activeContact]: [...(prev[activeContact] || []), { sender: 'Me', content: uiContent }]
+        }));
+        setChatStatus(prev => ({ ...prev, [activeContact]: 'Đã gửi' }));
+      } catch (err) {
+        console.error("Send Error:", err);
+        alert("Lỗi gửi tin");
+      }
+    };
+
+    // 2. Process File Upload (if any)
+    if (selectedFile) {
+      try {
+        const { encryptedBlob, key, iv, type } = await encryptFile(selectedFile);
         const formData = new FormData();
-        formData.append('encryptedFile', encryptedBlob, file.name);
-        // FIX PORT 8001 HERE TOO
+        formData.append('encryptedFile', encryptedBlob, selectedFile.name);
+
+        // Upload to Cloudinary
         const res = await axios.post('http://localhost:8001/api/upload', formData);
-        const filePayload = { type: 'FILE', url: res.data.url, fileName: file.name, mimeType: type, key: toBase64(key), iv: toBase64(iv) };
-        finalContent = JSON.stringify(filePayload);
-        displayContent = filePayload;
-      } catch (e) { return alert("Upload thất bại"); }
+        const url = res.data.url;
+
+        const filePayload = {
+          type: 'FILE',
+          url: url,
+          fileName: selectedFile.name,
+          mimeType: type,
+          key: toBase64(key),
+          iv: toBase64(iv)
+        };
+
+        await sendPayload(filePayload, filePayload);
+      } catch (e) {
+        console.error(e);
+        return alert("Upload thất bại");
+      }
     }
 
-    try {
-      const [headerStr, ciphertext] = await clientRef.current.sendMessage(activeContact, finalContent);
-      user.socket.emit('private_message', { to: activeContact, header: headerStr, ciphertext: toBase64(new Uint8Array(ciphertext)) });
-      setConversations(prev => ({ ...prev, [activeContact]: [...(prev[activeContact] || []), { sender: 'Me', content: displayContent }] }));
-      setChatStatus(prev => ({ ...prev, [activeContact]: 'Đã gửi' }));
-      setInput('');
-      if (fileInputRef.current) fileInputRef.current.value = null;
-      await saveRatchetState();
-    } catch (err) { alert("Lỗi gửi tin"); }
+    // 3. Process Text Message (if any)
+    if (input.trim()) {
+      await sendPayload(input, { type: 'TEXT', text: input });
+    }
+
+    // Cleanup
+    setInput('');
+    clearSelectedFile();
+    await saveRatchetState();
   };
   // ... UI RENDER LOGIC ...
   const onEmojiClick = (emojiObject) => setInput(prev => prev + emojiObject.emoji);
@@ -384,9 +449,15 @@ const Chat = () => {
   if (isRestoring || !user) return <div className="flex h-screen w-full items-center justify-center bg-black text-cyan-500 animate-pulse">ĐANG KHÔI PHỤC PHIÊN...</div>;
 
   return (
-    <div className="flex h-screen overflow-hidden bg-slate-900 text-slate-100 font-sans" onClick={() => { setMenuOpenId(null); setShowEmoji(false); }}>
-      <div className="w-80 shrink-0 border-r border-slate-700 bg-slate-800/50 flex flex-col">
-        <div className="p-4 border-b border-slate-700 flex justify-between items-center bg-slate-800">
+    <div className="relative flex h-screen overflow-hidden bg-slate-900 text-slate-100 font-sans selection:bg-indigo-500/30" onClick={() => { setMenuOpenId(null); setShowEmoji(false); }}>
+      {/* Background Decor */}
+      <div className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none z-0">
+        <div className="absolute top-[-10%] left-[-10%] w-96 h-96 bg-purple-500/30 rounded-full mix-blend-multiply filter blur-3xl opacity-50 animate-blob"></div>
+        <div className="absolute top-[-10%] right-[-10%] w-96 h-96 bg-indigo-500/30 rounded-full mix-blend-multiply filter blur-3xl opacity-50 animate-blob animation-delay-2000"></div>
+        <div className="absolute -bottom-32 left-20 w-96 h-96 bg-pink-500/30 rounded-full mix-blend-multiply filter blur-3xl opacity-50 animate-blob animation-delay-4000"></div>
+      </div>
+      <div className="z-10 w-80 shrink-0 glass border-r-0 flex flex-col transition-all duration-300">
+        <div className="p-4 border-b border-white/10 flex justify-between items-center bg-black/20 backdrop-blur-md">
           <div className="flex items-center space-x-3">
             <div className="h-10 w-10 circle-avatar bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center font-bold shadow-lg">{user.username.charAt(0).toUpperCase()}</div>
             <h3 className="font-bold text-lg">{user.username}</h3>
@@ -431,8 +502,8 @@ const Chat = () => {
           ))}
         </div>
       </div>
-      <div className="flex flex-1 flex-col bg-slate-900 relative">
-        <div className="h-16 border-b border-slate-700 flex items-center px-6 bg-slate-800 shadow-md">
+      <div className="z-10 flex flex-1 flex-col bg-slate-900/50 backdrop-blur-sm relative">
+        <div className="h-16 border-b border-white/5 flex items-center px-6 glass shadow-sm">
           {activeContact ? (
             <div className='flex flex-col'>
               <span className="font-bold text-lg flex items-center gap-2">{activeContact === 'Gemini AI' ? '✨ Chat với AI' : activeContact}</span>
@@ -441,13 +512,27 @@ const Chat = () => {
           ) : (<span className="text-slate-500">Chọn một cuộc hội thoại</span>)}
         </div>
         <div className="flex-1 overflow-y-auto p-6 space-y-4">
-          {!activeContact && (<div className="h-full flex flex-col items-center justify-center text-slate-500 gap-4 opacity-50"><div className='text-6xl'>💬</div><div className='text-xl font-light'>Chào mừng quay trở lại, {user.username}!</div></div>)}
+
+          {!activeContact && (
+            <div className="h-full flex flex-col items-center justify-center text-slate-500 gap-6 animate-fadeIn">
+              <div className="relative">
+                <div className="w-24 h-24 bg-gradient-to-tr from-indigo-500 to-purple-500 rounded-full blur-xl opacity-20 absolute top-0 left-0 animate-blob"></div>
+                <svg className="w-20 h-20 text-slate-600 relative z-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                </svg>
+              </div>
+              <div className="text-center">
+                <h2 className="text-2xl font-bold text-slate-200 mb-2">Secure Chat App</h2>
+                <p className="font-light text-slate-400">Chọn một hội thoại để bắt đầu nhắn tin an toàn.</p>
+              </div>
+            </div>
+          )}
           {activeMessages.map((msg, i) => {
             const isMe = msg.sender === 'Me';
             const isLast = i === activeMessages.length - 1;
             return (
-              <div key={i} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} animate-slideIn`}>
-                <div className={`max-w-[85%] rounded-2xl px-4 py-2 shadow-sm ${isMe ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-slate-700 text-slate-100 rounded-bl-none'}`}>
+              <div key={i} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} animate-popIn`}>
+                <div className={`max-w-[85%] rounded-2xl px-5 py-3 shadow-lg backdrop-blur-sm transition-all hover:scale-[1.01] ${isMe ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-br-none border border-white/10 shadow-purple-500/20' : 'bg-slate-800/80 text-slate-100 rounded-bl-none border border-white/5 shadow-slate-900/50'}`}>
                   {msg.content.type === 'TEXT' ? (
                     <div className={`prose prose-sm prose-invert max-w-none break-words leading-relaxed`}>
                       <ReactMarkdown components={{
@@ -485,13 +570,30 @@ const Chat = () => {
           <div ref={messagesEndRef} />
         </div>
         {activeContact && (
-          <div className="p-4 border-t border-slate-700 bg-slate-800 flex gap-3 items-center relative" onClick={e => e.stopPropagation()}>
-            {showEmoji && (<div className="absolute bottom-20 left-4 z-50 shadow-2xl rounded-2xl overflow-hidden border border-slate-600"><EmojiPicker theme="dark" onEmojiClick={onEmojiClick} searchDisabled={false} width={300} height={400} /></div>)}
-            <button onClick={() => setShowEmoji(!showEmoji)} className={`p-2 rounded-full transition-all ${showEmoji ? 'text-yellow-400 bg-slate-700' : 'text-slate-400 hover:text-yellow-400 hover:bg-slate-700/50'}`}><svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></button>
-            <button onClick={() => fileInputRef.current.click()} className="p-2 text-slate-400 hover:text-indigo-400 hover:bg-slate-700/50 rounded-full transition-all"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg></button>
-            <input type="file" ref={fileInputRef} className="hidden" />
-            <input className="flex-1 bg-slate-900 text-slate-200 rounded-full px-5 py-3 outline-none border border-slate-700 focus:border-indigo-500 transition-colors shadow-inner" placeholder={`Nhắn tin tới ${activeContact}...`} value={input} onChange={handleInputChange} onKeyPress={e => e.key === 'Enter' && handleSend()} onFocus={() => setShowEmoji(false)} />
-            <button onClick={handleSend} disabled={!input && !fileInputRef.current?.files[0]} className="p-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-full shadow-lg transition-transform active:scale-90 disabled:opacity-50 disabled:active:scale-100"><svg className="w-5 h-5 translate-x-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg></button>
+          <div className="p-4 border-t border-white/5 glass relative" onClick={e => e.stopPropagation()}>
+            {selectedFile && (
+              <div className="absolute bottom-full left-4 mb-2 p-2 bg-slate-800 rounded-lg border border-slate-600 shadow-xl flex items-center gap-3 animate-slideIn max-w-sm">
+                <div className="w-10 h-10 bg-slate-700 rounded flex items-center justify-center text-xl">
+                  {selectedFile.type.startsWith('image/') ? '🖼️' : '📄'}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium text-white truncate">{selectedFile.name}</div>
+                  <div className="text-xs text-slate-400">{(selectedFile.size / 1024).toFixed(1)} KB</div>
+                </div>
+                <button onClick={clearSelectedFile} className="p-1 hover:bg-slate-700 rounded-full text-slate-400 hover:text-red-400 transition-colors">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                </button>
+              </div>
+            )}
+
+            <div className="flex gap-3 items-center">
+              {showEmoji && (<div className="absolute bottom-20 left-4 z-50 shadow-2xl rounded-2xl overflow-hidden border border-slate-600"><EmojiPicker theme="dark" onEmojiClick={onEmojiClick} searchDisabled={false} width={300} height={400} /></div>)}
+              <button onClick={() => setShowEmoji(!showEmoji)} className={`p-2 rounded-full transition-all ${showEmoji ? 'text-yellow-400 bg-slate-700' : 'text-slate-400 hover:text-yellow-400 hover:bg-slate-700/50'}`}><svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></button>
+              <button onClick={() => fileInputRef.current.click()} className={`p-2 rounded-full transition-all ${selectedFile ? 'text-indigo-400 bg-slate-700/50' : 'text-slate-400 hover:text-indigo-400 hover:bg-slate-700/50'}`}><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg></button>
+              <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileChange} />
+              <input className="flex-1 bg-slate-900 text-slate-200 rounded-full px-5 py-3 outline-none border border-slate-700 focus:border-indigo-500 transition-colors shadow-inner" placeholder={`Nhắn tin tới ${activeContact}...`} value={input} onChange={handleInputChange} onKeyPress={e => e.key === 'Enter' && handleSend()} onFocus={() => setShowEmoji(false)} />
+              <button onClick={handleSend} disabled={!input && !selectedFile} className="p-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-full shadow-lg transition-transform active:scale-90 disabled:opacity-50 disabled:active:scale-100"><svg className="w-5 h-5 translate-x-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg></button>
+            </div>
           </div>
         )}
       </div>

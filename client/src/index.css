@@ -1,32 +1,115 @@
 /* src/index.css */
 @import "tailwindcss";
 
-/* Cấu hình theme trực tiếp trong CSS (Tính năng mới của v4) */
 @theme {
-  --font-mono: 'Courier New', Courier, monospace; /* Font Hacker */
-  
+  --font-mono: 'Courier New', Courier, monospace;
+  --font-outfit: 'Outfit', sans-serif;
   --animate-blob: blob 7s infinite;
+  --animate-slideIn: slideIn 0.3s ease-out forwards;
+  --animate-fadeIn: fadeIn 0.5s ease-out forwards;
+  --animate-popIn: popIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
 }
 
-/* Định nghĩa Keyframes cho hiệu ứng nền động */
+@keyframes popIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 @keyframes blob {
-  0% { transform: translate(0px, 0px) scale(1); }
-  33% { transform: translate(30px, -50px) scale(1.1); }
-  66% { transform: translate(-20px, 20px) scale(0.9); }
-  100% { transform: translate(0px, 0px) scale(1); }
+  0% {
+    transform: translate(0px, 0px) scale(1);
+  }
+
+  33% {
+    transform: translate(30px, -50px) scale(1.1);
+  }
+
+  66% {
+    transform: translate(-20px, 20px) scale(0.9);
+  }
+
+  100% {
+    transform: translate(0px, 0px) scale(1);
+  }
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 /* Global Styles */
 body {
-    background-color: black;
-    color: white;
-    font-family: var(--font-mono); /* Sử dụng biến theme vừa tạo */
+  background-color: #0f172a;
+  /* Slate 900 base */
+  color: white;
+  font-family: var(--font-outfit);
+  overflow: hidden;
+  /* Prevent body scroll */
 }
 
-/* Utility classes bổ sung nếu cần (v4 tự động detect, nhưng thêm vào cho chắc chắn) */
+/* Custom Scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.4);
+}
+
+/* Glassmorphism Utilities */
+.glass {
+  background: rgba(30, 41, 59, 0.7);
+  /* Slate 800 with opacity */
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.glass-panel {
+  background: rgba(15, 23, 42, 0.6);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
 .animation-delay-2000 {
   animation-delay: 2s;
 }
+
 .animation-delay-4000 {
   animation-delay: 4s;
 }

@@ -1,4 +1,3 @@
-// --- FILE: src/App.jsx ---
 
 import React, { useState, useRef, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
@@ -10,8 +9,11 @@ import { MessengerClient } from './crypto/messenger';
 import { decryptWithGCM, fromBase64 } from './crypto/lib';
 import { CA_PUBLIC_KEY, GOV_PUBLIC_KEY } from './config';
 import io from 'socket.io-client';
+import { ToastContainer } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
 
 export const ClientContext = React.createContext();
+
 
 function App() {
   const clientRef = useRef(null);
@@ -56,9 +58,9 @@ function App() {
           client.govPublicKey = await window.crypto.subtle.importKey(
             "jwk", GOV_PUBLIC_KEY, { name: "ECDH", namedCurve: "P-384" }, true, []
           );
-          
+
           // Logic deserializeState mới trong messenger.js đã tự handle việc importKey
-          await client.deserializeState(keychainJSON); 
+          await client.deserializeState(keychainJSON);
 
           clientRef.current = client;
 
@@ -108,6 +110,21 @@ function App() {
           <Route path="/" element={<Navigate to="/login" />} />
         </Routes>
       </BrowserRouter>
+      <ToastContainer
+        position="bottom-right"
+        autoClose={4000}
+        hideProgressBar={true}
+        newestOnTop={false}
+        closeOnClick
+        rtl={false}
+        pauseOnFocusLoss
+        draggable
+        pauseOnHover
+        theme="dark"
+        toastClassName="!bg-slate-800/90 !backdrop-blur-md !border !border-white/10 !shadow-2xl !rounded-xl !mb-3 !cursor-pointer overflow-hidden transform transition-all hover:scale-[1.02]"
+        bodyClassName="!p-3 !m-0 !flex !items-start !gap-3 text-sm font-medium text-white"
+        progressClassName="!bg-indigo-500"
+      />
     </ClientContext.Provider>
   );
 }

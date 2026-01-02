@@ -55,7 +55,7 @@ export const syncKeychain = async (socket, data) => {
     }
 };
 
-// Lấy tin nhắn cũ khi user login lại
+// Lấy tin nhắn offline khi user login lại (chỉ lấy tin MỚI từ lần logout cuối cùng - Logic này cần Client gửi lastMessageId, nhưng tạm thời cứ gửi hết nếu chưa sync)
 export const fetchOfflineMessages = async (socket, username) => {
     try {
         // Lấy tin nhắn
