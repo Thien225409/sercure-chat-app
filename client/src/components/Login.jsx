@@ -76,7 +76,8 @@ const Login = () => {
 
         // LƯU VÀO SESSION STORAGE
         sessionStorage.setItem('AUTH_TOKEN', data.token); // JWT Token
-        sessionStorage.setItem('ENC_KEY', JSON.stringify(exportedKey)); // Key giải mã
+        sessionStorage.setItem('ENC_KEY', JSON.stringify(exportedKey)); // Key giải mã: Session-Only (Mất khi tắt tab)
+
 
         // Lưu pwKey và salt để dùng cho việc lưu keychain sau này ở Chat.jsx
         setUser({

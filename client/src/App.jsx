@@ -3,7 +3,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './components/Login';
 import Register from './components/Register';
-import Chat from './components/Chat';
+import ChatPage from './pages/ChatPage';
 
 import { MessengerClient } from './crypto/messenger';
 import { decryptWithGCM, fromBase64 } from './crypto/lib';
@@ -106,7 +106,7 @@ function App() {
         <Routes>
           <Route path="/login" element={!user ? <Login /> : <Navigate to="/chat" />} />
           <Route path="/register" element={!user ? <Register /> : <Navigate to="/chat" />} />
-          <Route path="/chat" element={user ? <Chat /> : <Navigate to="/login" />} />
+          <Route path="/chat" element={user ? <ChatPage /> : <Navigate to="/login" />} />
           <Route path="/" element={<Navigate to="/login" />} />
         </Routes>
       </BrowserRouter>

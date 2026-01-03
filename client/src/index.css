@@ -113,3 +113,14 @@ body {
 .animation-delay-4000 {
   animation-delay: 4s;
 }
+
+/* Twemoji Styles */
+img.emoji {
+  height: 1.25em;
+  width: 1.25em;
+  margin: 0 0.1em;
+  vertical-align: -0.2em;
+  display: inline-block;
+  pointer-events: none;
+  /* Prevent dragging/selecting emoji images */
+}
