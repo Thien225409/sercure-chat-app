@@ -391,14 +391,19 @@ const ChatPage = () => {
         }, 150); // 150ms đủ để render và scroll
     };
 
-    const handleStartChat = (targetUserWrapper) => {
-        if (!targetUserWrapper || !user?.socket) return;
-        user.socket.emit('check_user', targetUserWrapper, (response) => {
-            if (response.exists) {
-                if (!conversations[targetUserWrapper]) setConversations(prev => ({ ...prev, [targetUserWrapper]: [] }));
-                setUserStatuses(prev => ({ ...prev, [targetUserWrapper]: response.isOnline ? 'ONLINE' : 'OFFLINE' }));
-                handleSelectContact(targetUserWrapper); // Use the new handler
-            } else { toast.error("🚫 Người dùng không tồn tại!"); }
+    const handleStartChat = async (targetUserWrapper) => {
+        if (!targetUserWrapper || !user?.socket) return false;
+        return new Promise((resolve) => {
+            user.socket.emit('check_user', targetUserWrapper, (response) => {
+                if (response.exists) {
+                    if (!conversations[targetUserWrapper]) setConversations(prev => ({ ...prev, [targetUserWrapper]: [] }));
+                    setUserStatuses(prev => ({ ...prev, [targetUserWrapper]: response.isOnline ? 'ONLINE' : 'OFFLINE' }));
+                    handleSelectContact(targetUserWrapper);
+                    resolve(true);
+                } else {
+                    resolve(false);
+                }
+            });
         });
     };
 

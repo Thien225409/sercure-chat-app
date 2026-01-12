@@ -15,10 +15,23 @@ const Sidebar = ({
     handleLogoutClick
 }) => {
     const [searchUser, setSearchUser] = useState('');
+    const [isError, setIsError] = useState(false);
 
-    const handlePlusClick = () => {
-        onStartChat(searchUser);
-        setSearchUser('');
+    const handlePlusClick = async () => {
+        if (!searchUser.trim()) return;
+        const success = await onStartChat(searchUser);
+        if (!success) {
+            setIsError(true);
+            setTimeout(() => setIsError(false), 500); // Reset animation state
+        } else {
+            setSearchUser('');
+        }
+    };
+
+    // Auto clear error when typing
+    const handleInputChange = (e) => {
+        setSearchUser(e.target.value);
+        if (isError) setIsError(false);
     };
 
     return (
@@ -39,10 +52,14 @@ const Sidebar = ({
             <div className="p-4 pt-2">
                 <div className="flex gap-2">
                     <input
-                        className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:border-indigo-500 outline-none transition-all"
-                        placeholder="Thêm tin nhắn mới..."
+                        className={`flex-1 bg-slate-900 border rounded-lg px-3 py-2 text-sm focus:outline-none transition-all duration-200 
+                            ${isError
+                                ? 'border-red-500 shadow-[0_0_10px_rgba(239,68,68,0.5)] animate-[shake_0.4s_ease-in-out]'
+                                : 'border-slate-600 focus:border-indigo-500'}`}
+                        placeholder={isError ? "Người dùng không tồn tại!" : "Thêm tin nhắn mới..."}
                         value={searchUser}
-                        onChange={e => setSearchUser(e.target.value)}
+                        onChange={handleInputChange}
+                        onKeyDown={(e) => { if (e.key === 'Enter') handlePlusClick(); }}
                     />
                     <button onClick={handlePlusClick} className="bg-indigo-600 hover:bg-indigo-700 w-10 rounded-lg text-lg flex items-center justify-center font-bold transition-transform active:scale-95">+</button>
                 </div>

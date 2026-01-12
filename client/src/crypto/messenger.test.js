@@ -9,7 +9,10 @@ import {
     HMACtoAESKey,
     bufferToString,
     govEncryptionDataStr,
-    fromBase64
+    fromBase64,
+    toBase64,
+    encryptFile,
+    decryptFile
 } from './lib.js';
 
 const stringifyCert = function (cert) {
@@ -182,6 +185,26 @@ describe('Messenger', function () {
             expect(result).toEqual(message)
         })
 
+        it('the government cannot decrypt with the wrong private key', async function () {
+            const alice = new MessengerClient(caKeyPair.pub, govKeyPair.pub)
+            const bob = new MessengerClient(caKeyPair.pub, govKeyPair.pub)
+            const aliceCertificate = await alice.generateCertificate('alice')
+            const bobCertificate = await bob.generateCertificate('bob')
+            const aliceCertSignature = await signWithECDSA(caKeyPair.sec, stringifyCert(aliceCertificate))
+            const bobCertSignature = await signWithECDSA(caKeyPair.sec, stringifyCert(bobCertificate))
+            await alice.receiveCertificate(bobCertificate, bobCertSignature)
+            await bob.receiveCertificate(aliceCertificate, aliceCertSignature)
+            const message = 'Hello, Bob'
+            const ct = await alice.sendMessage('bob', message)
+
+            // Generate a different government key pair (hacker/wrong key)
+            const startStr = "Wrong Gov Key";
+            const wrongGovKeyPair = await generateEG();
+
+            // Should fail to decrypt (likely throws due to GCM tag mismatch or import key failure)
+            await expect(govDecrypt(wrongGovKeyPair.sec, ct)).rejects.toThrow()
+        })
+
         // // EXTENDED TEST CASES
 
         it('certificates with invalid signatures are rejected', async function () {
@@ -256,7 +279,8 @@ describe('Messenger', function () {
             // `messenger.js` sends text. The UI likely calls `encryptFile`, sends the `key` via `messenger.sendMessage`, and uploads the blob.
 
             // So we simulate that flow:
-            const { encryptFile, decryptFile } = await import('./lib.js');
+            // The { encryptFile, decryptFile } are now imported at the top-level
+
 
             // mock File object
             const file = new File([fileContent], "test.txt", { type: "text/plain" });
@@ -265,9 +289,9 @@ describe('Messenger', function () {
 
             // Alice sends the key to Bob securely
             // The key is raw bytes (ArrayBuffer). Messenger sends strings.
-            // We must encode the key to string (Base64) to send via messenger.
-            const keyStr = btoa(String.fromCharCode(...new Uint8Array(key)));
-            const ivStr = btoa(String.fromCharCode(...new Uint8Array(iv)));
+            // We use toBase64 helper from lib.js
+            const keyStr = toBase64(key);
+            const ivStr = toBase64(iv);
             const msgPayload = JSON.stringify({ key: keyStr, iv: ivStr, type });
 
             const ct = await alice.sendMessage('bob', msgPayload);
@@ -279,8 +303,8 @@ describe('Messenger', function () {
             expect(govDecryptedPayloadStr).toEqual(msgPayload);
 
             // Bob decrypts file
-            const receivedKey = new Uint8Array(atob(receivedPayload.key).split('').map(c => c.charCodeAt(0)));
-            const receivedIv = new Uint8Array(atob(receivedPayload.iv).split('').map(c => c.charCodeAt(0)));
+            const receivedKey = fromBase64(receivedPayload.key);
+            const receivedIv = fromBase64(receivedPayload.iv);
 
             // In real app, encryptedBlob is sent via server. Bob has it.
             // We need to convert Blob back to ArrayBuffer for decryptFile in test (or pass Blob if supported)

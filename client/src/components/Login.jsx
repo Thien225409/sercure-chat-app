@@ -12,22 +12,29 @@ const Login = () => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  const [successMsg, setSuccessMsg] = useState('');
 
   const navigate = useNavigate();
   const location = useLocation(); // Hook để lấy dữ liệu từ Navigate
 
-  // Hiển thị lỗi nếu được chuyển hướng từ App (ví dụ: hết session) ---
+  // Hiển thị lỗi hoặc thông báo thành công nếu được chuyển hướng từ App
   useEffect(() => {
     if (location.state?.message) {
       setErrorMsg(location.state.message);
-      // Xóa state trong history để F5 không hiện lại lỗi
       window.history.replaceState({}, document.title);
+    }
+    if (location.state?.successMessage) {
+      setSuccessMsg(location.state.successMessage);
+      window.history.replaceState({}, document.title);
+      // Tự động tắt thông báo sau 3s (mờ dần)
+      setTimeout(() => setSuccessMsg(''), 3000);
     }
   }, [location]);
 
   const handleLogin = async (e) => {
     e.preventDefault();
     setErrorMsg('');// Reset lỗi cũ
+    setSuccessMsg('');
 
     const socket = io('http://localhost:8001');
 
@@ -121,6 +128,13 @@ const Login = () => {
             </h2>
             <p className="text-xs text-slate-400 mt-2 uppercase tracking-[0.2em]">End-to-End Encryption</p>
           </div>
+
+          {/* Success Notification */}
+          {successMsg && (
+            <div className="mb-6 p-4 bg-emerald-500/10 border border-emerald-500/50 rounded-lg text-emerald-400 text-sm text-center font-bold animate-popIn shadow-[0_0_10px_rgba(16,185,129,0.2)]">
+              🎉 {successMsg}
+            </div>
+          )}
 
           {errorMsg && (
             <div className="mb-4 p-3 bg-red-500/20 border border-red-500 rounded-lg text-red-200 text-sm text-center animate-pulse">

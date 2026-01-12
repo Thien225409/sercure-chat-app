@@ -5,6 +5,7 @@ import { cryptoKeyToJSON, encryptWithGCM, genRandomSalt, toBase64 } from '../cry
 import { deriveKeyFromPassword } from '../utils';
 import { useNavigate } from 'react-router-dom';
 import io from 'socket.io-client';
+import { toast } from 'react-toastify';
 
 const Register = () => {
     const [username, setUsername] = useState('');
@@ -51,9 +52,9 @@ const Register = () => {
             });
             // Sự kiện đăng kí thành công
             socket.on('register_success', () => {
-                alert("Đăng ký thành công!");
+                // Không show toast ở đây nữa, chuyển hướng và hiện thông báo đẹp bên Login
                 socket.disconnect();
-                navigate('/login');
+                navigate('/login', { state: { successMessage: "Đăng ký thành công! Hãy đăng nhập ngay." } });
             });
 
             // Fallback cho lỗi kết nối
@@ -123,6 +124,10 @@ const Register = () => {
                             <span className="relative z-10">SIGN UP</span>
                             <div className="absolute inset-0 h-full w-full scale-0 rounded-lg transition-all duration-300 group-hover:scale-100 group-hover:bg-linear-to-r group-hover:from-cyan-600 group-hover:to-emerald-500"></div>
                         </button>
+
+                        <p className="text-[10px] text-center text-red-400/80 mt-2 font-mono">
+                            ⚠️ Lưu ý: Chúng tôi không lưu mật khẩu. Nếu quên, bạn sẽ mất vĩnh viễn tài khoản.
+                        </p>
                     </div>
 
                     <div className="mt-6 text-center">
