@@ -23,7 +23,7 @@ export function stringToBuffer(str) {
   return new TextEncoder().encode(str);
 }
 
-export function bufferToString (arr) {
+export function bufferToString(arr) {
   // Converts from ArrayBuffer to string
   // Used to go from output of decryptWithGCM to string
   return new TextDecoder().decode(arr);
@@ -41,32 +41,32 @@ export function toUint8Array(data) {
 }
 
 export function toBase64(arr) {
-    let binary = '';
-    const bytes = new Uint8Array(arr);
-    const len = bytes.byteLength;
-    for (let i = 0; i < len; i++) {
-        binary += String.fromCharCode(bytes[i]);
-    }
-    return window.btoa(binary);
+  let binary = '';
+  const bytes = new Uint8Array(arr);
+  const len = bytes.byteLength;
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return window.btoa(binary);
 }
 
 export const fromBase64 = (base64) => {
-    const binary_string = window.atob(base64);
-    const len = binary_string.length;
-    const bytes = new Uint8Array(len);
-    for (let i = 0; i < len; i++) {
-        bytes[i] = binary_string.charCodeAt(i);
-    }
-    return bytes;
+  const binary_string = window.atob(base64);
+  const len = binary_string.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binary_string.charCodeAt(i);
+  }
+  return bytes;
 };
 
-export function genRandomSalt (len = 16) {
+export function genRandomSalt(len = 16) {
   // Used to generate IVs for AES encryption
   // Used in combination with encryptWithGCM and decryptWithGCM
   return crypto.getRandomValues(new Uint8Array(len))
 }
 
-export async function cryptoKeyToJSON (cryptoKey) {
+export async function cryptoKeyToJSON(cryptoKey) {
   // Used to and return CryptoKey in JSON format
   // Can console.log() the returned variable to see printed key in a readable format
   // This function can be helpfl for debugging since console.log() on cryptoKey
@@ -75,7 +75,7 @@ export async function cryptoKeyToJSON (cryptoKey) {
   return key
 }
 
-export async function generateEG () {
+export async function generateEG() {
   // returns a pair of ElGamal keys as an object
   // private key is keypairObject.sec
   // public key is keypairObject.pub
@@ -84,7 +84,7 @@ export async function generateEG () {
   return keypairObject
 }
 
-export async function computeDH (myPrivateKey, theirPublicKey) {
+export async function computeDH(myPrivateKey, theirPublicKey) {
   // computes Diffie-Hellman key exchange for an EG private key and EG public key
   // myPrivateKey should be pair.sec from generateEG output
   // theirPublicKey should be pair.pub from generateEG output
@@ -95,22 +95,23 @@ export async function computeDH (myPrivateKey, theirPublicKey) {
     { name: 'HMAC', hash: 'SHA-256', length: 256 }, true, ['sign', 'verify'])
 }
 
-export async function verifyWithECDSA (publicKey, message, signature) {
+export async function verifyWithECDSA(publicKey, message, signature) {
   // returns true if signature is correct for message and publicKey
   // publicKey should be pair.pub from generateECDSA
   // message must be a string
   // signature must be exact output of signWithECDSA
   // returns true if verification is successful and false is fails
-  return await subtle.verify({ 
-    name: 'ECDSA', 
-    hash: { name: 'SHA-384' } }, 
-    publicKey, 
-    signature, 
+  return await subtle.verify({
+    name: 'ECDSA',
+    hash: { name: 'SHA-384' }
+  },
+    publicKey,
+    signature,
     toUint8Array(message)
   )
 }
 
-export async function HMACtoAESKey (key, data, exportToArrayBuffer = false) {
+export async function HMACtoAESKey(key, data, exportToArrayBuffer = false) {
   // Performs HMAC to derive a new key with derivedKeyAlgorithm AES
   // if exportToArrayBuffer is true, return key as ArrayBuffer. Otherwise, output CryptoKey
   // key is a CryptoKey
@@ -118,8 +119,8 @@ export async function HMACtoAESKey (key, data, exportToArrayBuffer = false) {
 
   // first compute HMAC output
   const hmacBuf = await subtle.sign(
-    { name: 'HMAC' }, 
-    key, 
+    { name: 'HMAC' },
+    key,
     toUint8Array(data)
   )
 
@@ -136,7 +137,7 @@ export async function HMACtoAESKey (key, data, exportToArrayBuffer = false) {
   return out
 }
 
-export async function HMACtoHMACKey (key, data) {
+export async function HMACtoHMACKey(key, data) {
   // Performs HMAC to derive a new key with derivedKeyAlgorithm HMAC
   // key is a CryptoKey
   // data is a string
@@ -147,7 +148,7 @@ export async function HMACtoHMACKey (key, data) {
   return await subtle.importKey('raw', hmacBuf, { name: 'HMAC', hash: 'SHA-256', length: 256 }, true, ['sign'])
 }
 
-export async function HKDF (inputKey, salt, infoStr) {
+export async function HKDF(inputKey, salt, infoStr) {
   // Calculates HKDF outputs
   // inputKey is a cryptoKey with derivedKeyAlgorithm HMAC
   // salt is a second cryptoKey with derivedKeyAlgorithm HMAC
@@ -176,7 +177,7 @@ export async function HKDF (inputKey, salt, infoStr) {
   return [hkdfOut1, hkdfOut2]
 }
 
-export async function encryptWithGCM (key, plaintext, iv, authenticatedData = '') {
+export async function encryptWithGCM(key, plaintext, iv, authenticatedData = '') {
   // Encrypts using the GCM mode.
   // key is a cryptoKey with derivedKeyAlgorithm AES-GCM
   // plaintext is a string or ArrayBuffer of the data you want to encrypt.
@@ -189,17 +190,17 @@ export async function encryptWithGCM (key, plaintext, iv, authenticatedData = ''
   // (If there is no authenticatedData passed when encrypting, then it is not
   // necessary while decrypting.)
   return await subtle.encrypt(
-    { 
-      name: 'AES-GCM', 
-      iv, 
-      additionalData: toUint8Array(authenticatedData) 
-    }, 
-    key, 
+    {
+      name: 'AES-GCM',
+      iv,
+      additionalData: toUint8Array(authenticatedData)
+    },
+    key,
     toUint8Array(plaintext)
   )
 }
 
-export async function decryptWithGCM (key, ciphertext, iv, authenticatedData = '') {
+export async function decryptWithGCM(key, ciphertext, iv, authenticatedData = '') {
   // Decrypts using the GCM mode.
   // key is a cryptoKey with derivedKeyAlgorithm AES-GCM
   // ciphertext is an ArrayBuffer
@@ -224,7 +225,7 @@ export async function decryptWithGCM (key, ciphertext, iv, authenticatedData = '
 // tests for certificate signatures in test-messenger.js.
 /// /////////////////////////////////////////////////////////////////////////////
 
-export async function generateECDSA () {
+export async function generateECDSA() {
   // returns a pair of Digital Signature Algorithm keys as an object
   // private key is keypairObject.sec
   // public key is keypairObject.pub
@@ -233,20 +234,31 @@ export async function generateECDSA () {
   return keypairObject
 }
 
-export async function signWithECDSA (privateKey, message) {
+export async function signWithECDSA(privateKey, message) {
   // returns signature of message with privateKey
   // privateKey should be pair.sec from generateECDSA
   // message is a string
   // signature returned as an ArrayBuffer
   return await subtle.sign(
-    { name: 'ECDSA', hash: { name: 'SHA-384' } }, 
-    privateKey, 
+    { name: 'ECDSA', hash: { name: 'SHA-384' } },
+    privateKey,
     toUint8Array(message)
   )
 }
 
 export async function encryptFile(file) {
-  const fileBuffer = await file.arrayBuffer();
+  let fileBuffer;
+  if (file.arrayBuffer) {
+    fileBuffer = await file.arrayBuffer();
+  } else {
+    // Fallback for environments where Blob.arrayBuffer is not available (e.g. some JSDOM versions)
+    fileBuffer = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsArrayBuffer(file);
+    });
+  }
 
   const fileKey = await window.crypto.subtle.generateKey(
     { name: 'AES-GCM', length: 256 },
@@ -257,10 +269,13 @@ export async function encryptFile(file) {
   const iv = genRandomSalt(12);
 
   // Mã hóa nội dung file
+  // Ensure data is Uint8Array
+  const dataBytes = new Uint8Array(fileBuffer);
+
   const encryptedContent = await window.crypto.subtle.encrypt(
     { name: 'AES-GCM', iv: iv },
     fileKey,
-    fileBuffer
+    dataBytes
   );
 
   // Xuất key ra dạng raw để gửi qua tin nhắn chat
@@ -284,10 +299,13 @@ export async function decryptFile(encryptedBuffer, rawKey, iv, type) {
     ['decrypt']
   );
 
+  // Ensure encryptedBuffer is Uint8Array
+  const dataBytes = new Uint8Array(encryptedBuffer);
+
   const decryptedBuffer = await window.crypto.subtle.decrypt(
     { name: 'AES-GCM', iv: iv },
     fileKey,
-    encryptedBuffer
+    dataBytes
   );
 
   return new Blob([decryptedBuffer], { type: type });
