@@ -4,7 +4,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './components/Login';
 import Register from './components/Register';
 import ChatPage from './pages/ChatPage';
-import GovDashboard from './pages/GovDashboard';
+import ChatPage from './pages/ChatPage';
 
 import { MessengerClient } from './crypto/messenger';
 import { decryptWithGCM, fromBase64 } from './crypto/lib';
@@ -108,7 +108,6 @@ function App() {
           <Route path="/login" element={!user ? <Login /> : <Navigate to="/chat" />} />
           <Route path="/register" element={!user ? <Register /> : <Navigate to="/chat" />} />
           <Route path="/chat" element={user ? <ChatPage /> : <Navigate to="/login" />} />
-          <Route path="/gov" element={<GovDashboard />} />
           <Route path="/" element={<Navigate to="/login" />} />
         </Routes>
       </BrowserRouter>
