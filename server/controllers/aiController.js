@@ -37,9 +37,20 @@ export async function chatWithGemini(socket, data) {
             lastRole = role;
         }
 
+        // --- BUG FIX: Ensure first message is USER ---
+        if (formattedHistory.length > 0 && formattedHistory[0].role !== 'user') {
+            // Option 1: Insert a dummy prompt at start
+            formattedHistory.unshift({ role: 'user', parts: [{ text: "Hello AI Assistant" }] });
+        }
+        // ---------------------------------------------
+
         const chat = model.startChat({
             history: formattedHistory,
-            generationConfig: { maxOutputTokens: 8192 }, // Tăng giới hạn token để không bị đứt quãng
+            generationConfig: { maxOutputTokens: 2000 },
+            systemInstruction: {
+                role: "system",
+                parts: [{ text: "Bạn là Trợ lý AI thông minh (Smart Chat Assistant) trong một ứng dụng nhắn tin bảo mật E2E. \n\nNHIỆM VỤ CỦA BẠN:\n1. Tóm tắt nội dung cuộc trò chuyện khi được hỏi.\n2. Đưa ra gợi ý, lời khuyên dựa trên ngữ cảnh chat.\n3. Trả lời NGẮN GỌN, SÚC TÍCH, thân thiện.\n4. Nếu người dùng hỏi về bảo mật, hãy khẳng định đây là ứng dụng an toàn tuyệt đối.\n\nLƯU Ý: Bạn đang đọc lịch sử chat của người dùng để hỗ trợ họ. Hãy tỏ ra hữu ích và thông minh." }]
+            }
         });
 
         const result = await chat.sendMessage(prompt);

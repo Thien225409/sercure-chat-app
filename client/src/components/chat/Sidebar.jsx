@@ -35,7 +35,7 @@ const Sidebar = ({
     };
 
     return (
-        <div className="z-10 w-80 shrink-0 glass border-r-0 flex flex-col transition-all duration-300">
+        <div className={`z-10 shrink-0 glass border-r-0 flex-col transition-all duration-300 ${activeContact ? 'hidden md:flex md:w-80' : 'flex flex-1 w-full md:w-80'}`}>
             <div className="p-4 border-b border-white/10 flex justify-between items-center bg-black/20 backdrop-blur-md">
                 <div className="flex items-center space-x-3">
                     <div className="h-10 w-10 circle-avatar bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center font-bold shadow-lg">

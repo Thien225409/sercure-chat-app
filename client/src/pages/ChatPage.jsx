@@ -43,12 +43,41 @@ const ChatPage = () => {
     const [chatStatus, setChatStatus] = useState({});
     const [isLoadingChat, setIsLoadingChat] = useState(false);
 
+    // AI Assistant State
+    const [aiSessionStartIndex, setAiSessionStartIndex] = useState(null);
+
     const messagesEndRef = useRef(null);
     const typingTimeoutRef = useRef(null);
     const syncTimeoutRef = useRef(null);
     const prevActiveContactRef = useRef(null);
 
     const activeMessages = activeContact ? (conversations[activeContact] || []) : [];
+
+    // Reset AI when changing contact
+    useEffect(() => {
+        setAiSessionStartIndex(null);
+    }, [activeContact]);
+
+    const toggleAI = () => {
+        if (aiSessionStartIndex !== null) {
+            setAiSessionStartIndex(null);
+            toast.info("🤖 Gemini AI has left the chat.");
+            // Optional local system message
+            setConversations(prev => ({
+                ...prev,
+                [activeContact]: [...(prev[activeContact] || []), { sender: 'System', content: { type: 'TEXT', text: '🤖 Gemini AI đã rời phòng chat.' }, id: crypto.randomUUID() }]
+            }));
+        } else {
+            const currentIndex = (conversations[activeContact] || []).length;
+            setAiSessionStartIndex(currentIndex);
+            toast.success("🤖 Gemini AI is listening...");
+            // Optional local system message
+            setConversations(prev => ({
+                ...prev,
+                [activeContact]: [...(prev[activeContact] || []), { sender: 'System', content: { type: 'TEXT', text: '🤖 Gemini AI đã tham gia và đang lắng nghe...' }, id: crypto.randomUUID() }]
+            }));
+        }
+    };
 
     // ==================== AUTO LOGIN (PORT 8001) ====================
     useEffect(() => {
@@ -67,7 +96,7 @@ const ChatPage = () => {
             setIsRestoring(true);
 
             try {
-                const socket = io('http://localhost:8001');
+                const socket = io(import.meta.env.VITE_API_URL || 'http://localhost:8001');
                 socket.emit('login_token', { token: savedToken });
 
                 await new Promise((resolve, reject) => {
@@ -354,28 +383,13 @@ const ChatPage = () => {
         user.socket.on('friend_seen', handleFriendSeen);
 
         return () => {
-            // Safe cleanup: Only remove specific listeners
+            // Safe cleanup
             user.socket.off('receive_message', handleReceiveMessage);
             user.socket.off('offline_messages', handleOfflineMessages);
             user.socket.off('ai_response', handleAiResponse);
             user.socket.off('friend_typing', handleFriendTyping);
             user.socket.off('friend_stop_typing', handleFriendStopTyping);
             user.socket.off('friend_seen', handleFriendSeen);
-
-            // Do NOT remove 'user_status' or 'online_users_list' here as they might be shared global listeners, 
-            // or if they are local, define them similarly. 
-            // Looking at the original code, they weren't defined inside this specific block but `user` dep suggests they are re-bound.
-            // For safety, let's keep the global ones as they were but use named functions if possible, 
-            // BUT since I didn't verify their definitions in this chunk, I will leave the dangerous .off() ONLY for the ones I replaced.
-            // Wait, the original code had `user.socket.off('user_status')` etc.
-            // I should assume the previous code attached them somewhere? 
-            // No, the previous code didn't attach `user_status` in this block! 
-            // Wait, looking at Step 196 View File:
-            // "user.socket.off('user_status');" was in cleanup.
-            // BUT I don't see `user.socket.on('user_status'...)` in the viewed lines 300-400.
-            // It might be in the ... omitted lines or higher up. 
-            // Ah, actually `user_status` is handled globally or in another effect?
-            // Let's stick to cleaning up what we added.
         };
     }, [user, activeContact, clientRef]);
 
@@ -484,6 +498,26 @@ const ChatPage = () => {
             return;
         }
 
+        // --- AI COMMAND HANDLER (@Gemini) ---
+        if (textInput && textInput.startsWith('@Gemini')) {
+            if (aiSessionStartIndex === null) {
+                toast.warning("⚠️ AI chưa vào phòng! Bấm nút 🤖 trên góc phải để mời AI.");
+                // Fake system message
+                setConversations(prev => ({
+                    ...prev,
+                    [activeContact]: [...(prev[activeContact] || []), { sender: 'System', content: { type: 'TEXT', text: '⚠️ [System] Bạn cần mời AI vào phòng trước (Nút 🤖).' }, id: crypto.randomUUID() }]
+                }));
+                return;
+            }
+
+            const prompt = textInput.replace('@Gemini', '').trim();
+            const history = (conversations[activeContact] || []).slice(aiSessionStartIndex);
+
+            // Send to AI
+            user.socket.emit('ask_ai', { prompt, history });
+            // We continue to send the message to the friend below, so they see the command too.
+        }
+
         if (!clientRef.current.certs[activeContact]) {
             const success = await fetchAndImportCert(activeContact);
             if (!success) return;
@@ -498,7 +532,8 @@ const ChatPage = () => {
                 const { encryptedBlob, key, iv, type } = await encryptFile(fileInput);
                 const formData = new FormData();
                 formData.append('encryptedFile', encryptedBlob, fileInput.name);
-                const res = await axios.post('http://localhost:8001/api/upload', formData);
+                const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8001';
+                const res = await axios.post(`${baseUrl}/api/upload`, formData);
                 const filePayload = {
                     type: 'FILE',
                     url: res.data.url,
@@ -702,6 +737,9 @@ const ChatPage = () => {
                 handleMessageAction={handleMessageAction}
                 handleDownloadDecrypt={handleDownloadDecrypt}
                 isLoadingChat={isLoadingChat}
+                aiSessionStartIndex={aiSessionStartIndex}
+                toggleAI={toggleAI}
+                onBack={() => setActiveContact(null)}
             />
 
             <AttackConsole clientRef={clientRef} user={user} />

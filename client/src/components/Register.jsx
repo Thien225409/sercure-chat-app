@@ -43,7 +43,7 @@ const Register = () => {
                 salt: toBase64(salt)
             });
 
-            const socket = io('http://localhost:8001');
+            const socket = io(import.meta.env.VITE_API_URL || 'http://localhost:8001');
             socket.emit('register', { username, passwordHash: password, certificate: certJson, encryptedKeychain: encryptedKeychainPkg });
             // Sự kiện đăng kí thất bại
             socket.on('register_error', (data) => {
@@ -73,7 +73,7 @@ const Register = () => {
             <div className="absolute -bottom-8 left-20 w-72 h-72 bg-teal-500 rounded-full mix-blend-multiply filter blur-xl opacity-20 animate-blob animation-delay-4000"></div>
 
             {/* Main Card */}
-            <div className="relative z-10 w-full max-w-md p-px bg-linear-to-b from-emerald-500/20 to-cyan-500/20 rounded-2xl overflow-hidden shadow-[0_0_40px_rgba(0,0,0,0.5)]">
+            <div className="relative z-10 w-[90%] max-w-md p-px bg-linear-to-b from-emerald-500/20 to-cyan-500/20 rounded-2xl overflow-hidden shadow-[0_0_40px_rgba(0,0,0,0.5)]">
                 <div className="w-full h-full bg-black/90 backdrop-blur-md rounded-2xl p-8 border border-white/10">
                     {/* ... Header ... */}
                     <div className="text-center mb-8">

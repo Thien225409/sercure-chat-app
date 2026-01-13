@@ -4,7 +4,6 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './components/Login';
 import Register from './components/Register';
 import ChatPage from './pages/ChatPage';
-import ChatPage from './pages/ChatPage';
 
 import { MessengerClient } from './crypto/messenger';
 import { decryptWithGCM, fromBase64 } from './crypto/lib';
@@ -32,7 +31,7 @@ function App() {
       }
 
       console.log("🔄 Đang khôi phục phiên đăng nhập...");
-      const socket = io('http://localhost:8001');
+      const socket = io(import.meta.env.VITE_API_URL || 'http://localhost:8001');
       socket.emit('login_token', { token });
 
       socket.on('login_success', async (data) => {
