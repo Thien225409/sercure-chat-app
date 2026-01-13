@@ -1,0 +1,22 @@
+{
+  "GOV_PUBLIC_KEY": {
+    "key_ops": [],
+    "ext": true,
+    "kty": "EC",
+    "x": "6qPkBtM0WTndqGDu6LpSsBoYi-MYgiZNfqw50KRCU_SqPy3iy33VO9Y8fYx0F1t2",
+    "y": "cZklOl2--pbgHhml56hzdPhI_Vu40-Zg0mhjJ-PtJif_3hSDRJJJ5KXgMnCfyeHR",
+    "crv": "P-384"
+  },
+  "GOV_PRIVATE_KEY": {
+    "key_ops": [
+      "deriveKey",
+      "deriveBits"
+    ],
+    "ext": true,
+    "kty": "EC",
+    "x": "6qPkBtM0WTndqGDu6LpSsBoYi-MYgiZNfqw50KRCU_SqPy3iy33VO9Y8fYx0F1t2",
+    "y": "cZklOl2--pbgHhml56hzdPhI_Vu40-Zg0mhjJ-PtJif_3hSDRJJJ5KXgMnCfyeHR",
+    "crv": "P-384",
+    "d": "EJNhj4RHUlTPjNWiiymo04We2Mxq5_SGRIZ8t5a7d-Aiy4Afsps_tNpbgWyCocEH"
+  }
+}
