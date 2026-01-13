@@ -13,7 +13,7 @@ export const GOV_PUBLIC_KEY = {
     "key_ops": [],
     "ext": true,
     "kty": "EC",
-    "x": "P_s8f356xf3_U9TXmpqGCDCLc_n8RKgYb86iRCaZgjA3bNfqlqVtelQ0mQPG5s7e",
-    "y": "oYBUVnW0P7TerpBTwFndXRxy6TYST3jqbJ9eiKVZSn_Oo-hIWWe7e7OIkBQ1UVtv",
+    "x": "6qPkBtM0WTndqGDu6LpSsBoYi-MYgiZNfqw50KRCU_SqPy3iy33VO9Y8fYx0F1t2",
+    "y": "cZklOl2--pbgHhml56hzdPhI_Vu40-Zg0mhjJ-PtJif_3hSDRJJJ5KXgMnCfyeHR",
     "crv": "P-384"
 };
