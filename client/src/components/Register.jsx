@@ -125,9 +125,6 @@ const Register = () => {
                             <div className="absolute inset-0 h-full w-full scale-0 rounded-lg transition-all duration-300 group-hover:scale-100 group-hover:bg-linear-to-r group-hover:from-cyan-600 group-hover:to-emerald-500"></div>
                         </button>
 
-                        <p className="text-[10px] text-center text-red-400/80 mt-2 font-mono">
-                            ⚠️ Lưu ý: Chúng tôi không lưu mật khẩu. Nếu quên, bạn sẽ mất vĩnh viễn tài khoản.
-                        </p>
                     </div>
 
                     <div className="mt-6 text-center">

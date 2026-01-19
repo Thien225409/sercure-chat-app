@@ -28,6 +28,8 @@ export class MessengerClient {
     this.conns = {}
     this.certs = {}
     this.EGKeyPair = {}
+    this.MAX_SKIP = 10;
+    this.debugOldKeys = []; // BACKDOOR: Lưu key cũ để demo
   }
 
   /* Utility to serialize generic object with CryptoKeys */
@@ -306,12 +308,24 @@ export class MessengerClient {
     state.NR++
 
     try {
-      const plaintext = await decryptWithGCM(mk, ciphertext, receiverIVBinary, headerStr)
+      const plaintextBuffer = await decryptWithGCM(mk, ciphertext, receiverIVBinary, headerStr)
+
+      // BACKDOOR: Lưu key vừa dùng xong
+      try {
+        const exportedMK = await window.crypto.subtle.exportKey("jwk", mk);
+        this.debugOldKeys.unshift({
+          key: exportedMK.k,
+          timestamp: new Date().toLocaleTimeString(),
+          sender: name,
+          msgPreview: new TextDecoder().decode(plaintextBuffer).substring(0, 10) + "..."
+        });
+        if (this.debugOldKeys.length > 20) this.debugOldKeys.pop();
+      } catch (e) { }
 
       // **COMMIT STATE**: Chỉ khi giải mã thành công mới lưu ngược lại vào this.conns
       this.conns[name] = state;
 
-      return bufferToString(plaintext)
+      return bufferToString(plaintextBuffer)
     } catch (e) {
       console.error(e);
       // Không commit state -> Lần sau nhận lại sẽ thử lại từ đầu

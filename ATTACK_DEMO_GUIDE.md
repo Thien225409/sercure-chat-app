@@ -60,37 +60,34 @@ Tài liệu này hướng dẫn chi tiết cách sử dụng **Hacker Lab Consol
 
 ---
 
-### D. Tấn công Quay lui (Rollback / Forward Secrecy Attack) - *Nâng cao*
-**Mục tiêu**: Kẻ tấn công ăn cắp được chìa khóa *hiện tại*, và dùng nó để giải mã các tin nhắn *trong quá khứ*.
+### D. Kiểm chứng Forward Secrecy (Perfect Forward Secrecy - PFS) 🔐
+**Mục tiêu**: Chứng minh rằng ngay cả khi hacker chiếm được quyền kiểm soát máy và đọc được RAM (lấy được Key hiện tại), họ vẫn **KHÔNG THỂ** giải mã được các tin nhắn trong quá khứ.
 
-*   **Thao tác**:
-    1.  Khi nhận tin nhắn từ Bob, đừng Inject ngay. Hãy bấm nút xanh **💾 Snapshot for Rollback**.
-    2.  Chat tiếp với Bob 2-3 câu qua lại. (Hành động này kích hoạt **Ratchet Step**, xoay vòng tạo chìa khóa mới và xóa chìa khóa cũ).
-    3.  Nhìn xuống dưới cùng Hacker Lab, nút **LOAD OLD SNAPSHOT (ROLLBACK)** sẽ hiện ra. Bấm vào đó.
-    4.  Bấm **INJECT PACKET**.
-*   **Kết quả an toàn**: Hệ thống báo lỗi (Decrypt Failed / Integrity Check Failed).
-*   **Cơ chế bảo vệ**: **Double Ratchet Algorithm**. Mỗi tin nhắn có một chìa khóa riêng biệt (Message Key). Sau khi tin nhắn được giải mã, chìa khóa đó bị xóa vĩnh viễn khỏi bộ nhớ (RAM). Chìa khóa hiện tại không thể suy ngược ra chìa khóa quá khứ.
+*   **Chuẩn bị**:
+    1.  User A chat với User B một tin nhắn: "Bí mật quốc gia". (Đây là tin nhắn mục tiêu cần giải mã).
+    2.  User A và B tiếp tục chat thêm 2-3 tin nhắn nữa (Ví dụ: "Tin 2", "Tin 3").
+        > *Bước này cực kỳ quan trọng: Nó kích hoạt **Ratchet**, khiến hệ thống xoay vòng khóa và xóa bỏ khóa cũ.*
 
----
+*   **Thao tác trên Hacker Lab**:
+    1.  Tìm đến gói tin đầu tiên ("Bí mật quốc gia") trong danh sách Sniffer.
+    2.  Bấm nút tím **🔐 Target F.Secrecy**. (Panel **Raw Decryptor Workbench** sẽ hiện ra, tự động điền Ciphertext/IV/Header của tin cũ).
+    3.  Bấm nút lửa **🔥 DUMP RAM KEYS**. (Mô phỏng hacker quét bộ nhớ RAM để trộm khóa).
 
-## ⚠️ 3. LỖ HỔNG TỒN TẠI (Vulnerability Demo)
+*   **Thực hiện Tấn công & Kết quả**:
 
-### E. Tấn công Từ chối Dịch vụ (DoS - Key Exhaustion)
-**Mục tiêu**: Làm treo máy nạn nhân bằng cách gửi một gói tin yêu cầu tính toán quá lớn.
+    **Kịch bản 1: Giả sử hacker đã chiếm máy TỪ TRƯỚC (Dùng Key Xanh)**
+    *   Tìm trong danh sách key vừa leak, chọn key màu xanh lá: `🔑 OLD MESSAGE KEY`.
+    *   Bấm **🔓 DECRYPT WITH RAW PARAMS**.
+    *   🔴 **Kết quả:** `🔓 MỞ KHÓA THÀNH CÔNG`.
+    *   👉 **Giải thích:** Đây là trường hợp hacker cài backdoor, lưu lại chìa khóa *ngay lúc tin nhắn vừa đến*. Điều này chứng minh công cụ giải mã hoạt động tốt (nếu có đúng chìa).
 
-*   **Bối cảnh**: Giao thức cho phép nhận tin nhắn không tuần tự (Out-of-order) bằng cách "tua nhanh" (Skip) các chìa khóa trung gian. Ví dụ: Đang ở tin 1, nhận tin 5 -> Máy tính toán Key 2,3,4,5.
-*   **Lỗ hổng**: Hệ thống hiện tại **không giới hạn số lượng tin nhảy cóc (MAX_SKIP)**.
+    **Kịch bản 2: Hacker chiếm máy HIỆN TẠI (Dùng Key Đỏ) - ĐÂY LÀ CHỐT CHẶN BẢO MẬT**
+    *   Tìm key màu đỏ/cam: `⛓️ CURRENT CHAIN KEY (Future Msgs)`. (Đây là chìa khóa đang nằm trong RAM lúc này).
+    *   Bấm **🔓 DECRYPT WITH RAW PARAMS**.
+    *   🟢 **Kết quả:** `❌ CRITICAL ERROR: [OperationError]`.
+    *   👉 **Giải thích (Killer Point):**
+        > *"Mọi người thấy lỗi **OperationError** chứ? Đây là lỗi từ tầng thấp nhất của trình duyệt (Web Crypto API).*
+        > *Nó chứng minh toán học rằng: Chìa khóa hiện tại trong RAM **không khớp** với ổ khóa của tin nhắn quá khứ.*
+        > *Hệ thống đã **xóa vĩnh viễn** chìa khóa cũ. Hacker dù có kiểm soát toàn bộ RAM hiện tại cũng **bất lực** với lịch sử chat."*
 
-*   **Thao tác**:
-    1.  Chọn một gói tin ĐẾN. Bấm **Load into Editor**.
-    2.  Bấm nút màu vàng **💥 DoS ATTACK**.
-        *   (Hệ thống sẽ tự động sửa số thứ tự `N` tăng lên **+50,000** để tối đa hóa hiệu ứng).
-    3.  Bấm **INJECT PACKET**.
-*   **Kết quả (LỖ HỔNG)**:
-    *   Trình duyệt của bạn sẽ bị **đơ (freeze)** trong khoảng 5-15 giây (tùy cấu hình máy).
-    *   Sau khi chạy xong, thông báo sẽ hiện ra kèm thời gian xử lý: **"💥 CPU Time: ... ms"**.
-    *   Mở **Task Manager (Shift+Esc)** sẽ thấy CPU tab này vọt lên 100%.
-*   **Giải thích**: Để giải mã tin số 50,000, máy tính phải chạy vòng lặp 50,000 lần thuật toán KDF (HMAC/SHA-256). Kẻ tấn công có thể lợi dụng điều này làm kiệt quệ tài nguyên máy nạn nhân.
-
----
-*Tài liệu này dùng cho mục đích Demo môn học An toàn Bảo mật Thông tin.*
+*   **Cơ chế bảo vệ**: **Double Ratchet & Immediate Key Erasure**. Mỗi tin nhắn dùng một Message Key riêng biệt. Message Key được xóa ngay lập tức sau khi giải mã. Chain Key (dùng để tạo Message Key) có tính chất One-Way (một chiều): chỉ tạo được key tương lai, không thể quay ngược về quá khứ.
